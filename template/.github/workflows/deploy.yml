@@ -1,0 +1,12 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  deploy:
+    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main
+    secrets: inherit

@@ -1,0 +1,17 @@
+{
+  "name": "astrojones",
+  "owner": {
+    "name": "astrojones",
+    "url": "https://github.com/astrojones"
+  },
+  "metadata": {
+    "description": "Internal Claude Code plugins for the astrojones org."
+  },
+  "plugins": [
+    {
+      "name": "astrojones-dev",
+      "source": "./",
+      "description": "nuklaut deploy knowledge, /new-app scaffolding, and deploy-doctor CI diagnosis."
+    }
+  ]
+}

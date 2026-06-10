@@ -1,0 +1,70 @@
+# astrojones-dev
+
+Claude Code plugin that makes shipping apps in the `astrojones` org easy. It bundles
+the deployment knowledge, a one-command scaffolder, and a CI-failure diagnostician so
+a new contributor can go from nothing to a live `https://<app>.astrojones.de` without
+learning the controller internals or touching SSH.
+
+## Install
+
+```bash
+/plugin marketplace add astrojones/astrojones-dev
+/plugin install astrojones-dev@astrojones
+```
+
+(Requires org membership — the repo is public, but `gh repo create` inside the org
+needs you to have accepted your org invite.)
+
+## What's inside
+
+| Component | Kind | What it does |
+|-----------|------|--------------|
+| `nuklaut-deploy` | Skill | Always-on knowledge. Auto-triggers when you edit `.nuklaut/deployment.yml`, a compose file, or ask "how do I deploy". Knows the `nuk/v1` schema, the hard compose rules, two-segment GHCR naming, the `APP_ENV` secrets model, databases, ingress, and auth. |
+| `/new-app <name>` | Command | Scaffolds a new app: creates the repo, drops in the four wired-up files, replaces placeholders, and tells you the manual steps (Dockerfile, secrets). Does not push — you decide when to deploy. |
+| `deploy-doctor` | Agent | Diagnoses a red `deploy` run or a 502: pulls the run logs, reads the four files, and maps the failure to a root cause + concrete fix. |
+
+## How deployment works (the short version)
+
+Push to `main` → the org reusable workflow
+(`astrojones/.github/.github/workflows/nuk-deploy.yml`) runs on the self-hosted
+`nuklaut` runner → builds and pushes `ghcr.io/astrojones/<repo>:latest` → `nuk apply`
+turns your manifest into a docker-compose project behind Traefik at
+`https://<repo>.astrojones.de`. **No SSH, no per-repo deploy keys.**
+
+Every app needs exactly four files:
+
+```
+.github/workflows/deploy.yml   # calls the reusable workflow; never edit
+.nuklaut/deployment.yml        # nuk/v1 manifest — ingress, optional db, auth
+docker-compose.yml             # service def; no ports/labels/container_name
+Dockerfile                     # yours
+```
+
+The canonical, always-correct copies live in [`template/`](./template/) — that is what
+`/new-app` copies from.
+
+## The rules that bite people
+
+1. Image is **two-segment**: `ghcr.io/astrojones/<repo>:latest`.
+2. **No `ports:`** in compose — use `expose:`.
+3. **No `traefik.*` labels** — nuk generates routing.
+4. **No `container_name:`**.
+5. `metadata.name` **==** repo name.
+6. Replace every **`__REPO_NAME__`** before pushing.
+
+See the `nuklaut-deploy` skill (`skills/nuklaut-deploy/references/`) for the full
+manifest reference and a symptom→fix troubleshooting table.
+
+## Relationship to other org repos
+
+- **`astrojones/.github`** — hosts the reusable CI workflows (deploy, runner
+  lifecycle, e2e, migration checks). This plugin does **not** duplicate them; the
+  scaffolded `deploy.yml` calls them. Keep editing CI there.
+- **`astrojones/app-template`** — the old "Use this template" repo. Superseded by
+  `/new-app`; slated for retirement once the command is proven.
+
+## Local development
+
+```bash
+claude --plugin-dir /path/to/astrojones-dev    # test before publishing
+```
