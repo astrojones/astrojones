@@ -20,7 +20,7 @@ needs you to have accepted your org invite.)
 | Component | Kind | What it does |
 |-----------|------|--------------|
 | `nuklaut-deploy` | Skill | Always-on knowledge. Auto-triggers when you edit `.nuklaut/deployment.yml`, a compose file, or ask "how do I deploy". Knows the `nuk/v1` schema, the hard compose rules, two-segment GHCR naming, the `APP_ENV` secrets model, databases, ingress, and auth. |
-| `/new-app <name>` | Command | Scaffolds a new app: creates the repo, drops in the four wired-up files, replaces placeholders, and tells you the manual steps (Dockerfile, secrets). Does not push — you decide when to deploy. |
+| `/new-app <name>` | Command | Scaffolds a new app — **Python (FastAPI) by default**, or `--node`. For Python it generates `pyproject.toml` from the org [standards](https://github.com/astrojones/standards) and proves `uv sync`+`pytest`+`ruff`+`ty` pass before handing off. Creates the repo, wires the deploy files, replaces placeholders. Does not push — you decide when. |
 | `deploy-doctor` | Agent | Diagnoses a red `deploy` run or a 502: pulls the run logs, reads the four files, and maps the failure to a root cause + concrete fix. |
 
 ## How deployment works (the short version)
@@ -40,8 +40,9 @@ docker-compose.yml             # service def; no ports/labels/container_name
 Dockerfile                     # yours
 ```
 
-The canonical, always-correct copies live in [`template/`](./template/) — that is what
-`/new-app` copies from.
+The canonical, always-correct copies live in [`template/`](./template/) —
+`template/python-backend/` (FastAPI + uv, wired to the org Python standard) and
+`template/node/` (minimal Node service). That is what `/new-app` copies from.
 
 ## The rules that bite people
 
@@ -60,6 +61,8 @@ manifest reference and a symptom→fix troubleshooting table.
 - **`astrojones/.github`** — hosts the reusable CI workflows (deploy, runner
   lifecycle, e2e, migration checks). This plugin does **not** duplicate them; the
   scaffolded `deploy.yml` calls them. Keep editing CI there.
+- **`astrojones/standards`** — the SSOT for engineering standards (Python tooling,
+  CI/CD). `/new-app` and `pyproject-canon` generate from it; don't hand-copy its config.
 - **`astrojones/app-template`** — the old "Use this template" repo. Superseded by
   `/new-app`; slated for retirement once the command is proven.
 

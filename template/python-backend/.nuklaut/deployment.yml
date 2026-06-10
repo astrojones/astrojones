@@ -1,0 +1,19 @@
+apiVersion: nuk/v1
+kind: Deployment
+metadata:
+  name: __REPO_NAME__              # must equal the repo name
+spec:
+  source: {}                      # leave empty; CI deploys from the runner checkout
+  ingress:
+    - host: __REPO_NAME__.astrojones.de
+      service: web                # matches the service in docker-compose.yml
+      port: 8080                  # uvicorn listens here
+  envFrom:
+    - secretRef: /opt/nuklaut/secrets/__REPO_NAME__.env   # per-app (from APP_ENV)
+    - secretRef: /opt/nuklaut/secrets/_shared.env         # org-wide
+
+# Managed Postgres (uncomment): nuk injects DATABASE_URL into the web service.
+# SQLAlchemy/asyncpg apps want the driver-qualified scheme.
+#  databases:
+#    postgres: { driver: asyncpg }
+#    redis: true                  # namespace keys as "__REPO_NAME__:*"

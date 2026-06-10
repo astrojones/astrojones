@@ -94,6 +94,8 @@ namespaced `<app>:…`. See `references/manifest.md` for lifecycle and driver de
 
 See **`references/manifest.md`** for the full `nuk/v1` schema and these cases, and
 **`references/troubleshooting.md`** for what each failure mode looks like and its fix.
+Controller operators (manual `nuk` over SSH, Traefik internals, provisioning
+guardrails) — see **`references/admin.md`**.
 
 ## When something fails
 
