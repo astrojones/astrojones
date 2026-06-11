@@ -12,6 +12,16 @@
       "name": "astrojones-dev",
       "source": "./",
       "description": "nuklaut deploy knowledge, /new-app scaffolding, and deploy-doctor CI diagnosis."
+    },
+    {
+      "name": "repo-agent-harness",
+      "source": {
+        "source": "github",
+        "repo": "astrojones/repo-agent-harness"
+      },
+      "category": "developer-tools",
+      "keywords": ["mcp", "agent", "harness", "serena", "code-navigation", "safety", "verification"],
+      "description": "Repo-aware coding-agent harness: deterministic MCP repo tools, Serena semantic navigation, safe-shell policies, coding-workflow skills, and verification hooks."
     }
   ]
 }

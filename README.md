@@ -27,7 +27,7 @@ needs you to have accepted your org invite.)
 
 ## Born harnessed — apps that teach any coding assistant
 
-Every scaffolded repo also carries the **[repo-agent-harness](https://github.com/astrojones/agentic-repo)**
+Every scaffolded repo also carries the **[repo-agent-harness](https://github.com/astrojones/repo-agent-harness)**
 (installed at scaffold time via `uvx … repo-agent-harness init`, sha-pinned): `AGENTS.md`
 (org charter + harness rules), `.mcp.json` (Serena + 10 deterministic `repo_*` tools),
 `agent/policies/` (safe-shell bounds), and `agent/tools/` (the same operations as CLIs).
