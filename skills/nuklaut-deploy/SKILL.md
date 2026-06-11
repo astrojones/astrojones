@@ -23,6 +23,19 @@ A deployable app repo contains exactly these:
 
 `/new-app` scaffolds all four correctly. Prefer it over copying by hand.
 
+## Check the rules mechanically first
+
+Scaffolded apps carry `agent/tools/deploy-validate` (installed by `/new-app`; retrofit
+older repos with `/harness-app`). It deterministically checks every hard rule below plus
+manifest↔compose consistency — run it before pushing and after editing any deploy file:
+
+```bash
+./agent/tools/deploy-validate          # exit 0 + "DEPLOYABLE" or a list of violations
+```
+
+`agent/tools/deploy-status` and `agent/tools/deploy-logs` show the pipeline after a push
+(gh-based, no SSH). Only reason about the rules by hand when the repo lacks the tools.
+
 ## Hard rules — violating any of these breaks the deploy
 
 1. **Image name is two-segment:** `ghcr.io/astrojones/<repo>:latest`.
@@ -99,7 +112,9 @@ guardrails) — see **`references/admin.md`**.
 
 ## When something fails
 
-The `deploy-doctor` agent pulls the failed run's logs and maps them to a cause. Invoke
-it on a red CI run rather than guessing. Common causes: unreplaced `__REPO_NAME__`,
-image-path mismatch (rule 1), a `ports:`/`traefik.*` violation, missing manifest, or a
-typo'd `APP_ENV` key.
+Run `./agent/tools/deploy-validate` first — it mechanically rules the file-level causes
+in or out. Then the `deploy-doctor` agent pulls the failed run's logs
+(`agent/tools/deploy-logs` shows them too) and maps them to a cause. Invoke it on a red
+CI run rather than guessing. Common causes: unreplaced `__REPO_NAME__`, image-path
+mismatch (rule 1), a `ports:`/`traefik.*` violation, missing manifest, or a typo'd
+`APP_ENV` key.

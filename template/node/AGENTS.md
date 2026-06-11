@@ -2,30 +2,15 @@
 
 Project charter every agent reads before editing.
 
-## Standards (non-negotiable)
-
-This project follows the org Python standard:
-**[astrojones/standards](https://github.com/astrojones/standards)**
-(`python/pyproject.canonical.toml`). The tooling config is generated from it —
-do not hand-edit `[tool.ruff]`, `[tool.ty]`, `[tool.pytest.ini_options]`, or
-`[tool.coverage.*]`. To refresh, regenerate with the `pyproject-canon` skill.
-
 ## The gate (must pass before every commit)
 
+Keep the Docker build green — it is the deploy artifact:
+
 ```bash
-uv sync && uv run pytest && uv run ruff check . && uv run ty check
+docker build -t __REPO_NAME__:check .
 ```
 
-Type errors and lint failures are blockers, not warnings.
-
-## Code rules
-
-- **Pydantic-everywhere.** No `dict`, `list[dict]`, or `Any` across public
-  function boundaries. Construct models at the call site.
-- **No relative imports** (`ban-relative-imports = "all"`).
-- **Google docstrings** on public modules/classes/functions.
-- **TDD**: RED → GREEN → REFACTOR. Write the failing test first.
-- **ty, not mypy.** `ruff format`, not black.
+Add `npm test` to this gate as soon as the app has tests.
 
 ## Deploy
 
@@ -49,11 +34,8 @@ no `ports:` (use `expose:`), no `traefik.*` labels, no `container_name:` in comp
 ## Layout
 
 ```
-src/__REPO_PKG__/api.py    FastAPI app (uvicorn entrypoint: __REPO_PKG__.api:app)
-src/__REPO_PKG__/__main__.py  `python -m __REPO_PKG__` local runner
-tests/                     pytest suite
-.nuklaut/deployment.yml    nuk manifest
+Dockerfile                 your app build (listens on 8080)
 docker-compose.yml         service def (expose 8080, no ports/labels)
-Dockerfile                 uv-based build
+.nuklaut/deployment.yml    nuk manifest
 agent/                     repo-agent-harness: policies + tools (see harness section below)
 ```

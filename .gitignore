@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.serena/
+.pytest_cache/
+.ruff_cache/
+uv.lock
+.DS_Store

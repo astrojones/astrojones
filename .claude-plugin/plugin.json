@@ -1,7 +1,7 @@
 {
   "name": "astrojones-dev",
-  "version": "0.2.0",
-  "description": "Onboarding + deployment toolkit for the astrojones org: nuklaut deploy knowledge, app scaffolding, and CI failure diagnosis.",
+  "version": "0.3.0",
+  "description": "Onboarding + deployment toolkit for the astrojones org: nuklaut deploy knowledge, app scaffolding (born harnessed via repo-agent-harness), repo-carried deploy tools, and CI failure diagnosis.",
   "author": {
     "name": "astrojones",
     "url": "https://github.com/astrojones"

@@ -7,7 +7,7 @@ frozen copy of the org standard and would drift.
 fetches the live canonical config from
 [astrojones/standards](https://github.com/astrojones/standards)
 (`python/pyproject.canonical.toml`), applies the **api** shape (FastAPI +
-uvicorn + httpx, `FAST` ruff rule) and Python 3.13, and substitutes the project
+uvicorn + httpx, `FAST` ruff rule) and Python 3.14, and substitutes the project
 name/package. Then `uv sync` produces `uv.lock`.
 
 To regenerate later (e.g. to pull a standards update), run `pyproject-canon`

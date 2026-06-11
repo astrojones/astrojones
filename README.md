@@ -20,8 +20,22 @@ needs you to have accepted your org invite.)
 | Component | Kind | What it does |
 |-----------|------|--------------|
 | `nuklaut-deploy` | Skill | Always-on knowledge. Auto-triggers when you edit `.nuklaut/deployment.yml`, a compose file, or ask "how do I deploy". Knows the `nuk/v1` schema, the hard compose rules, two-segment GHCR naming, the `APP_ENV` secrets model, databases, ingress, and auth. |
-| `/new-app <name>` | Command | Scaffolds a new app — **Python (FastAPI) by default**, or `--node`. For Python it generates `pyproject.toml` from the org [standards](https://github.com/astrojones/standards) and proves `uv sync`+`pytest`+`ruff`+`ty` pass before handing off. Creates the repo, wires the deploy files, replaces placeholders. Does not push — you decide when. |
-| `deploy-doctor` | Agent | Diagnoses a red `deploy` run or a 502: pulls the run logs, reads the four files, and maps the failure to a root cause + concrete fix. |
+| `/new-app <name>` | Command | Scaffolds a new app — **Python (FastAPI) by default**, or `--node`. For Python it generates `pyproject.toml` from the org [standards](https://github.com/astrojones/standards) and proves `uv sync`+`pytest`+`ruff`+`ty` pass before handing off. Creates the repo, wires the deploy files, replaces placeholders, **harnesses the repo** (see below), and gates on `deploy-validate`. Does not push — you decide when. |
+| `/harness-app <name>` | Command | Retrofits an existing org app to the same standard: installs the harness, copies the deploy tools, completes AGENTS.md, runs `deploy-validate`. |
+| `deploy-doctor` | Agent | Diagnoses a red `deploy` run or a 502: runs `deploy-validate` for the mechanical checks, pulls the run logs, and maps the failure to a root cause + concrete fix. |
+| `template/_shared/agent/tools/` | Repo-carried tools | `deploy-validate` (the hard rules as a tested checker), `deploy-status`, `deploy-logs` — copied into every app, runnable by any assistant or CI, no SSH. Tested in this repo: `uv run pytest`. |
+
+## Born harnessed — apps that teach any coding assistant
+
+Every scaffolded repo also carries the **[repo-agent-harness](https://github.com/astrojones/agentic-repo)**
+(installed at scaffold time via `uvx … repo-agent-harness init`, sha-pinned): `AGENTS.md`
+(org charter + harness rules), `.mcp.json` (Serena + 10 deterministic `repo_*` tools),
+`agent/policies/` (safe-shell bounds), and `agent/tools/` (the same operations as CLIs).
+A contributor can clone an app and point **any** MCP-capable assistant at it — vanilla
+Claude Code, Codex, Cursor — with zero plugin installs: the repo itself provides repo
+navigation, guarded shell, and the deploy loop (`deploy-validate` / `deploy-status` /
+`deploy-logs`). This plugin stays the *creator-side* toolkit; the *repo* is the delivery
+vehicle for everyone else.
 
 ## How deployment works (the short version)
 

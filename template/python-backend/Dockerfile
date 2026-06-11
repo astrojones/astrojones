@@ -5,7 +5,7 @@ FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 WORKDIR /app
 
 # Copy metadata + lock first for layer caching, then the source.
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev
 

@@ -62,9 +62,14 @@ specific, minimal fix. You do not guess — you read logs and files first.
    gh run list --repo astrojones/<repo> --workflow deploy.yml -L 5
    gh run view <run-id> --repo astrojones/<repo> --log-failed
    ```
-2. Read the four deploy files (clone or `gh api .../contents/...` if not local). Run
-   the quick self-checks: grep for `__REPO_NAME__`, the `image:` line, and
-   `ports:|container_name:|traefik\.`.
+2. Read the four deploy files (clone or `gh api .../contents/...` if not local).
+   If the repo carries the harness deploy tools, run the deterministic checker first —
+   it rules failure modes 1–4 and 7 in or out mechanically:
+   ```bash
+   ./agent/tools/deploy-validate --json
+   ```
+   Only if the repo lacks it (not yet retrofitted with `/harness-app`), fall back to the
+   quick greps: `__REPO_NAME__`, the `image:` line, and `ports:|container_name:|traefik\.`.
 3. Cross-reference the log error and the files against the failure-mode list. Identify
    the single most likely root cause; note any secondary issues.
 4. If CI is green but the app is unhealthy, suspect modes 2/3/5. You cannot SSH the
