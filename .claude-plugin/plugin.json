@@ -1,6 +1,6 @@
 {
   "name": "astrojones-dev",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "The astrojones org plugin: nuklaut deploy knowledge, app scaffolding (born harnessed via repo-agent-harness), repo-carried deploy tools, CI failure diagnosis, plus the harness's Claude Code surface — coding-workflow skills, subagents, safety-hook shims, and /harness-init. The harness MCP server itself stays per-repo (sha-pinned .mcp.json); this plugin ships no server.",
   "author": {
     "name": "astrojones",

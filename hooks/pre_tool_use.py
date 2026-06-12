@@ -3,9 +3,11 @@
 
 The policy logic lives in the repo-agent-harness package (one brain); this shim
 only resolves *which* harness to ask: it reads the `repo-agent-harness` server
-entry from the current repo's `.mcp.json` and re-runs the same command with the
-console script swapped from `repo-agent-harness-mcp` to `repo-agent-harness hook
-pre-tool-use`. Repos without a harness entry are allowed through untouched.
+entry from the current repo's `.mcp.json` and, **only if it is the canonical
+sha-pinned uvx form**, re-runs it with the console script swapped from
+`repo-agent-harness-mcp` to `repo-agent-harness hook pre-tool-use`. Hooks run
+with no user-approval gate, so any other shape (including the harness repo's
+own relative-path dogfood form) is never executed and fails open instead.
 
 Fail-open by contract: any error (no repo, no .mcp.json, uvx cold-cache timeout)
 prints an empty response and exits 0 — a hook problem never blocks work.
@@ -14,13 +16,17 @@ prints an empty response and exits 0 — a hook problem never blocks work.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 _EVENT = "pre-tool-use"
-_TIMEOUT = (
-    8  # hooks.json allows 10s; first-ever uvx resolution may exceed this and fail open
+_GIT_TIMEOUT = 2
+_TIMEOUT = 7  # with git's 2s this stays under the 10s budget in hooks.json
+_SPEC_RE = re.compile(
+    r"^git\+https://github\.com/astrojones/repo-agent-harness"
+    r"@[0-9a-f]{40}#subdirectory=mcp$"
 )
 
 
@@ -32,10 +38,17 @@ def _allow() -> None:
 def _harness_argv(root: Path) -> list[str] | None:
     cfg = json.loads((root / ".mcp.json").read_text())
     entry = cfg["mcpServers"]["repo-agent-harness"]
-    argv = [entry["command"], *entry.get("args", [])]
-    if argv[-1] != "repo-agent-harness-mcp":
+    args = entry.get("args", [])
+    trusted = (
+        entry.get("command") == "uvx"
+        and len(args) == 3
+        and args[0] == "--from"
+        and bool(_SPEC_RE.match(args[1]))
+        and args[2] == "repo-agent-harness-mcp"
+    )
+    if not trusted:
         return None
-    return [*argv[:-1], "repo-agent-harness", "hook", _EVENT]
+    return ["uvx", "--from", args[1], "repo-agent-harness", "hook", _EVENT]
 
 
 def main() -> None:
@@ -45,7 +58,7 @@ def main() -> None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=_GIT_TIMEOUT,
             check=False,
         )
         if proc.returncode != 0:
@@ -61,7 +74,7 @@ def main() -> None:
             text=True,
             timeout=_TIMEOUT,
             check=False,
-            cwd=str(root),  # dogfood .mcp.json uses a relative --project path
+            cwd=str(root),  # the pinned harness reads agent/policies/ from its cwd repo
         )
         decision = json.loads(out.stdout)
     except Exception:
