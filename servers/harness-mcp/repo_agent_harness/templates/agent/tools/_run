@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Resolve and invoke the repo-agent-harness CLI for an agent/tools shim.
+#   _run <subcommand> [args...]
+# Order of preference: installed console script, then the repo-local mcp/ package, then
+# uvx from the spec declared in .mcp.json (so scaffolded repos work with no install).
+set -euo pipefail
+
+sub="${1:?usage: _run <subcommand> [args...]}"
+shift
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if command -v repo-agent-harness >/dev/null 2>&1; then
+  exec repo-agent-harness "$sub" "$@"
+fi
+
+if [ -f "$root/mcp/pyproject.toml" ] && command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$root/mcp" repo-agent-harness "$sub" "$@"
+fi
+
+if [ -f "$root/.mcp.json" ] && command -v uvx >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  spec="$(python3 -c '
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+    args = cfg["mcpServers"]["repo-agent-harness"]["args"]
+    print(args[args.index("--from") + 1])
+except Exception:
+    pass
+' "$root/.mcp.json")"
+  if [ -n "$spec" ]; then
+    exec uvx --from "$spec" repo-agent-harness "$sub" "$@"
+  fi
+fi
+
+printf '{"error": "repo-agent-harness CLI not found; install with: uv tool install repo-agent-harness"}\n' >&2
+exit 127

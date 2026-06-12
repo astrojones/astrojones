@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Heuristic blast radius for a path: dependents, test targets, risk.
+#   impact <path>
+exec "$(dirname "$0")/_run" impact "$@"

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "repo-agent-harness": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}/servers/harness-mcp", "repo-agent-harness-mcp"]
+    }
+  }
+}

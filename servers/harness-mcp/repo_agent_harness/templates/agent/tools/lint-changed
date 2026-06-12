@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Lint only the changed files (ruff / eslint), auto-detected.
+exec "$(dirname "$0")/_run" lint-changed "$@"

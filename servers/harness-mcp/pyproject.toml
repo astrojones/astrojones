@@ -1,0 +1,170 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "repo-agent-harness"
+version = "0.6.0"
+description = "Deterministic, safe, repo-aware tools for coding agents (MCP server + CLI)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jona Heidsick" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastmcp>=3.0",
+    "mcp>=1.20",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "watchfiles>=1.0",
+]
+
+[project.scripts]
+repo-agent-harness-mcp = "repo_agent_harness.server:main"
+repo-agent-harness = "repo_agent_harness.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-cov>=5.0", "ruff>=0.9", "ty>=0.0.29"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["repo_agent_harness"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["repo_agent_harness", "tests"]
+exclude = [".git", ".venv", "build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+preview = true
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "TID",    # flake8-tidy-imports — bans relative imports
+    "TCH",    # flake8-type-checking
+    "BLE",    # blind-except
+    "TRY",    # tryceratops
+    "EM",     # flake8-errmsg
+    "RSE",    # flake8-raise
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins shadowing
+    "C4",     # flake8-comprehensions
+    "C901",   # mccabe complexity
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific
+    "PL",     # pylint
+    "PIE",    # flake8-pie
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "RET",    # flake8-return
+    "DTZ",    # flake8-datetimez
+    "ANN401", # ban Any
+    "FIX",    # flake8-fixme
+    "ERA",    # eradicate
+    "T10",    # flake8-debugger
+    "PTH",    # flake8-use-pathlib
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "PT",     # flake8-pytest-style
+    "D",      # pydocstyle
+    "S",      # flake8-bandit
+    "FLY",    # flynt
+    "ARG",    # flake8-unused-arguments
+    "PGH003", # ban blanket type: ignore
+    "PGH004", # require specific noqa codes
+]
+ignore = [
+    "PLC0415", # import-outside-top-level
+    "RUF100",  # unused-noqa
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-positional-args = 5
+max-statements = 50
+max-branches = 12
+max-returns = 6
+max-nested-blocks = 5
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",
+    "TID251",
+    "PLR2004",
+    "PLR6301",
+    "D100",
+    "D102",
+    "D103",
+    "D104",
+    "S",
+    "ARG",
+    "ERA001",
+    "PLC",
+    "SIM",
+    "TRY",
+    "RET",
+    "RUF029",
+    "PT",
+]
+# subprocess is the intentional safe wrapper — never shell=True, always argv list.
+"repo_agent_harness/shell.py" = ["S404", "S603"]
+# Module is named within the package namespace; stdlib secrets is never imported here.
+"repo_agent_harness/secrets.py" = ["A005", "D105"]
+# The MCP prompt named "test" is not a pytest test function.
+"repo_agent_harness/server.py" = ["PT028"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-pytest-style]
+raises-extend-require-match-for = [
+    "pydantic.ValidationError",
+    "pydantic_core._pydantic_core.ValidationError",
+    "AttributeError",
+    "FileNotFoundError",
+    "asyncio.CancelledError",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------------------
+# ty
+# ---------------------------------------------------------------------------
+[tool.ty.rules]
+unresolved-import = "error"
+unresolved-reference = "error"
+invalid-assignment = "error"
+
+# ---------------------------------------------------------------------------
+# pytest / coverage
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-v", "--strict-markers", "--cov=repo_agent_harness", "--cov-report=term-missing"]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["repo_agent_harness"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false

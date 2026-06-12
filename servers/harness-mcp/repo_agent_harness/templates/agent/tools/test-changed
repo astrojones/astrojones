@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Run the narrowest tests mapped to the changed files (pytest), auto-detected.
+exec "$(dirname "$0")/_run" test-changed "$@"

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Repository health snapshot from the declarative checks in agent/health.yml.
+exec "$(dirname "$0")/_run" health "$@"
