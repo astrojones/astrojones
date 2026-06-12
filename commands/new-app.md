@@ -70,7 +70,7 @@ Steps:
    plugins) gets safe, repo-aware tooling. One pinned command — bump the sha together
    with a tested harness update only:
    ```bash
-   HARNESS_SHA="bad6ebde2371f2f6e23d4317758d292605a5604e"   # repo-agent-harness main sha; keep --from and --pin in sync
+   HARNESS_SHA="ebff259fb41b4db6fefdcfda549303d08e20868f"   # repo-agent-harness main sha; keep --from and --pin in sync
    uvx --from "git+https://github.com/astrojones/repo-agent-harness@${HARNESS_SHA}#subdirectory=mcp" \
      repo-agent-harness init --pin "${HARNESS_SHA}" --json
    ```
