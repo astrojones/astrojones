@@ -70,13 +70,14 @@ Steps:
    plugins) gets safe, repo-aware tooling. One pinned command — bump the sha together
    with a tested harness update only:
    ```bash
-   HARNESS_SHA="d4e0f6597764251bdf4497b856c01c4cb5eac12e"   # repo-agent-harness main sha; keep --from and --pin in sync
+   HARNESS_SHA="79600a1857af1009c241d8976e7649798a028c50"   # repo-agent-harness main sha; keep --from and --pin in sync
    uvx --from "git+https://github.com/astrojones/repo-agent-harness@${HARNESS_SHA}#subdirectory=mcp" \
      repo-agent-harness init --pin "${HARNESS_SHA}" --json
    ```
-   This installs `agent/` (policies + manifest + harness tools), writes `.mcp.json`
-   (Serena + harness MCP servers, sha-pinned), and appends the harness section to the
-   scaffolded `AGENTS.md`. Report `created`/`merged`/`skipped`. Then tailor
+   This installs `agent/` (policies + manifest + health config + harness tools), writes
+   `.mcp.json` (a single sha-pinned harness MCP server — Serena is proxied through it as
+   `serena_*` tools), and appends the harness section to the scaffolded `AGENTS.md`.
+   Report `created`/`merged`/`skipped`/`removed`. Then tailor
    `agent/manifest.yml` (entrypoints, important paths) for the new app.
 
 6. **Validate the deploy files** with the repo's own deterministic checker — this

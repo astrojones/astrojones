@@ -16,7 +16,7 @@ Steps:
 
 1. **Install the harness** (same pinned command `/new-app` uses — keep the shas in sync):
    ```bash
-   HARNESS_SHA="d4e0f6597764251bdf4497b856c01c4cb5eac12e"   # repo-agent-harness main sha; keep --from and --pin in sync
+   HARNESS_SHA="79600a1857af1009c241d8976e7649798a028c50"   # repo-agent-harness main sha; keep --from and --pin in sync
    uvx --from "git+https://github.com/astrojones/repo-agent-harness@${HARNESS_SHA}#subdirectory=mcp" \
      repo-agent-harness init --pin "${HARNESS_SHA}" --json
    ```
