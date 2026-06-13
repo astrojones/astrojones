@@ -159,11 +159,52 @@ def test_repo_bootstrap_status_tool_reports_present_files(repo, monkeypatch):
     from repo_agent_harness import scaffold, server
 
     monkeypatch.chdir(repo)
-    scaffold.bootstrap_repo(
-        str(repo), target="both", agents_md="overwrite", pin="abc1234"
-    )
+    scaffold.bootstrap_repo(str(repo), target="both", agents_md="overwrite", pin="abc1234")
     status = server.repo_bootstrap_status()
     assert status["present"]["mcp_json"] is True
     assert status["present"]["agent_tree"] is True
     assert status["present"]["opencode_json"] is True
     assert status["present"]["agents_md"] is True
+
+
+# ---------------------------------------------------------------------------
+# opencode skills.paths convergence — the plugin rewrites the sentinel, so a
+# re-bootstrap must NOT re-emit it or duplicate the resolved path (issue #5 S1)
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_opencode_converges_after_plugin_rewrites_sentinel(repo):
+    """Re-bootstrap after the plugin resolved skills.paths must report skipped.
+
+    Live cycle: bootstrap writes the ``<set-by-opencode-plugin>`` sentinel; the
+    opencode plugin rewrites it to a real absolute path at first load; a later
+    bootstrap must converge (report ``skipped``) instead of re-adding the
+    sentinel or duplicating the resolved path.
+    """
+    scaffold.bootstrap_repo(str(repo), target="opencode")
+    oc_path = repo / ".opencode" / "opencode.json"
+
+    # Simulate the opencode plugin rewriting the sentinel to a real path.
+    cfg = json.loads(oc_path.read_text())
+    cfg["skills"]["paths"] = ["/fake/abs/path"]
+    oc_path.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    res = scaffold.bootstrap_repo(str(repo), target="opencode")
+    after = json.loads(oc_path.read_text())
+    assert after["skills"]["paths"] == ["/fake/abs/path"], "no dup, no re-added sentinel"
+    assert any("opencode.json" in s for s in res["skipped"]), "must converge to skipped"
+
+
+def test_bootstrap_opencode_preserves_user_skills_path(repo):
+    """A user-added skills.paths entry survives a re-bootstrap."""
+    scaffold.bootstrap_repo(str(repo), target="opencode")
+    oc_path = repo / ".opencode" / "opencode.json"
+
+    cfg = json.loads(oc_path.read_text())
+    cfg["skills"]["paths"] = ["/my/own/skills"]
+    oc_path.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    scaffold.bootstrap_repo(str(repo), target="opencode")
+    after = json.loads(oc_path.read_text())
+    assert "/my/own/skills" in after["skills"]["paths"], "user's entry must survive"
+    assert "<set-by-opencode-plugin>" not in after["skills"]["paths"], "no sentinel re-emit"

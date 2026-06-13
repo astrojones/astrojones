@@ -29,9 +29,6 @@ if TYPE_CHECKING:
 SECTION_BEGIN = "<!-- repo-agent-harness:section:begin -->"
 SECTION_END = "<!-- repo-agent-harness:section:end -->"
 
-_OPENCODE_SECTION_BEGIN = "// repo-agent-harness:section:begin"
-_OPENCODE_SECTION_END = "// repo-agent-harness:section:end"
-
 _REPO_URL = "https://github.com/astrojones/repo-agent-harness"
 _PLACEHOLDER_NAME = "__REPO_NAME__"
 _PLACEHOLDER_SPEC = "__HARNESS_SPEC__"
@@ -218,12 +215,6 @@ def _opencode_harness_block() -> dict:
     }
 
 
-def _opencode_render_block() -> str:
-    """Render the harness block as a JSON object (for embedding in section)."""
-    block = _opencode_harness_block()
-    return json.dumps(block, indent=2)
-
-
 def _opencode_resolve_paths(block: dict) -> dict:
     """Replace ``__HARNESS_OPENCODE_SKILLS_PATH__`` with the real path on disk.
 
@@ -246,6 +237,28 @@ def _opencode_resolve_paths(block: dict) -> dict:
     return out
 
 
+def _drop_resolved_skills_paths(block: dict, existing: dict) -> dict:
+    """Drop the ``skills.paths`` sentinel when the config already has paths.
+
+    Returns a copy of ``block`` without ``skills.paths`` when ``existing``
+    already declares non-empty ``skills.paths``.
+
+    The sentinel (``<set-by-opencode-plugin>``) is rewritten to a real path by
+    the opencode plugin. Re-merging the sentinel afterward never dedups against
+    the resolved path, so the list grows each session. Dropping it lets the
+    merge converge to ``skipped`` while preserving whatever paths are present.
+    """
+    if not existing.get("skills", {}).get("paths"):
+        return block
+    out = json.loads(json.dumps(block))
+    skills = out.get("skills")
+    if isinstance(skills, dict):
+        skills.pop("paths", None)
+        if not skills:
+            out.pop("skills", None)
+    return out
+
+
 def _install_opencode_json(root: Path, force: bool, result: dict) -> None:
     """Write or merge ``.opencode/opencode.json`` with the harness wiring.
 
@@ -259,15 +272,20 @@ def _install_opencode_json(root: Path, force: bool, result: dict) -> None:
         dest.write_text(json.dumps(block, indent=2) + "\n")
         result["created"].append(".opencode/opencode.json")
         return
+    existing = json.loads(dest.read_text())
+    # The opencode plugin rewrites the skills.paths sentinel to a real path at
+    # first load. Once paths are populated, re-emitting the sentinel would
+    # never dedup against the resolved path (sentinel != abs path), so the list
+    # would grow every session. Drop skills.paths from the overlay when the
+    # existing config already declares them — let the resolved/user paths stand.
+    overlay = _drop_resolved_skills_paths(block, existing)
     if force:
         # Replace: keep user keys, overwrite the harness block.
-        existing = json.loads(dest.read_text())
-        merged = _deep_merge(existing, block)
+        merged = _deep_merge(existing, overlay)
         dest.write_text(json.dumps(merged, indent=2) + "\n")
         result["replaced"].append(".opencode/opencode.json")
         return
-    existing = json.loads(dest.read_text())
-    merged = _deep_merge(existing, block)
+    merged = _deep_merge(existing, overlay)
     if merged == existing:
         result["skipped"].append(".opencode/opencode.json")
     else:
@@ -280,12 +298,21 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
 
     Used for opencode.json so that the harness block merges into the user's
     existing config without nuking their agent definitions or skill paths.
+    Dicts recurse; list-valued keys are *unioned* (order-preserving dedup) so
+    a user's own ``skills.paths``/agent-list entries survive a re-bootstrap
+    instead of being clobbered. Scalars are overwritten by ``overlay``.
     Returns a new dict; the inputs are not mutated.
     """
     out = dict(base)
     for k, v in overlay.items():
         if k in out and isinstance(out[k], dict) and isinstance(v, dict):
             out[k] = _deep_merge(out[k], v)
+        elif k in out and isinstance(out[k], list) and isinstance(v, list):
+            merged = list(out[k])
+            for item in v:
+                if item not in merged:
+                    merged.append(item)
+            out[k] = merged
         else:
             out[k] = v
     return out
@@ -366,9 +393,7 @@ def bootstrap_repo(  # noqa: PLR0913 — six kwargs are intentional; this is the
             next_steps.append("Restart the agent session so .mcp.json loads (non-plugin clients).")
         next_steps.append("For Claude Code: the plugin auto-connects the harness server.")
     if target in _OPENCODE_TARGETS:
-        next_steps.append(
-            "For opencode: the opencode plugin rewrites the skills.paths sentinel at first load."
-        )
+        next_steps.append("For opencode: the opencode plugin rewrites the skills.paths sentinel at first load.")
     result["next_steps"] = next_steps
     return result
 
