@@ -81,6 +81,11 @@ async function runHarnessCli(
     ],
     { cwd: opts.cwd, timeoutMs: opts.timeoutMs ?? 30_000 },
   )
+  // NOTE: `ok` tracks exit code only. The harness denies a command via
+  // exit 0 + JSON {"allowed": false}, so policyCheck honors structured
+  // decisions in the `res.ok` branch. If the harness CLI ever starts
+  // exiting non-zero on a deny, this would fall through to the weak
+  // fallback regex — callers must keep that contract in mind.
   if (res.code !== 0 && !res.stdout) {
     return { ok: false, out: null, stderr: res.stderr }
   }
@@ -310,7 +315,13 @@ export const AstrojonesDev: Plugin = async ({ worktree, directory }) => {
           : ""
       if (!command) return
       const decision = await policyCheck(command, target)
-      if (!decision.allowed) {
+      // opencode's tool.execute.before is allow/deny only — it has no
+      // confirmation prompt here. The harness "confirm-first" tier
+      // (requires_confirmation) therefore fails CLOSED: we block with the
+      // reason rather than let it run unprompted, which would silently drop
+      // a safety tier that exists on the Claude surface. Wiring the richer
+      // permission.ask hook to restore the interactive tier is a follow-up.
+      if (!decision.allowed || decision.requires_confirmation) {
         const error = new Error(
           `[astrojones-dev] command blocked by policy: ${decision.reason}`,
         )
