@@ -120,13 +120,13 @@ def init_repo(
     pin: str | None = None,
     spec: str | None = None,
 ) -> dict:
-    """Write a pinned .mcp.json into ``root`` for non-Claude-Code clients / CI.
+    """Scaffold the per-repo harness into ``root``.
 
-    This is an opt-in escape hatch. The harness MCP server is bundled in the
-    astrojones-dev plugin and needs no per-repo scaffolding for normal use.
-
-    ``agents_md="overwrite"`` additionally writes AGENTS.md (docs only, opt-in).
-    ``force`` allows overwriting an existing .mcp.json entry.
+    Always installs ``agent/`` (policies, manifest, tools) and optionally
+    ``AGENTS.md`` (controlled by ``agents_md``).  Pass ``--pin <sha>`` or
+    ``--spec <spec>`` to *also* write a project ``.mcp.json`` server entry —
+    an escape hatch for non-Claude-Code clients and CI environments where the
+    astrojones-dev plugin is not installed.
     """
     rootp = Path(root)
     result: dict = {
@@ -138,11 +138,17 @@ def init_repo(
         "skipped": [],
         "removed": [],
     }
-    _install_mcp_json(rootp, spec or harness_spec(pin), result)
-    if agents_md != "skip":
-        _install_agents_md(rootp, rootp.name, agents_md, result)
-    result["next_steps"] = [
-        "Restart the agent session so .mcp.json loads (non-Claude-Code clients).",
-        "For Claude Code: the plugin bundles the harness server — no init needed.",
-    ]
+    _install_agent_tree(rootp, rootp.name, force, result)
+    _install_agents_md(rootp, rootp.name, agents_md, result)
+    if pin is not None or spec is not None:
+        _install_mcp_json(rootp, spec or harness_spec(pin), result)
+        result["next_steps"] = [
+            "Restart the agent session so .mcp.json loads (non-Claude-Code clients).",
+            "For Claude Code: the plugin bundles the harness server — no restart needed.",
+        ]
+    else:
+        result["next_steps"] = [
+            "For Claude Code: the plugin auto-connects the harness server.",
+            "For non-Claude-Code clients: re-run with --pin <sha> to add .mcp.json.",
+        ]
     return result
