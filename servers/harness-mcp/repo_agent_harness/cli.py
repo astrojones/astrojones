@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -54,62 +53,13 @@ def _hook(event: str) -> int:
 def _deploy_status(limit: int, root: str) -> dict:
     """CLI wrapper for `repo_deploy_status` — list recent deploy runs."""
     name = deploy.repo_name(Path(root), None)
-    base = {
-        "repo": name,
-        "app_url": f"https://{name}.astrojones.de",
-        "image": f"ghcr.io/astrojones/{name}:latest",
-    }
-    try:
-        proc = subprocess.run(  # noqa: S603 — argv list, no shell
-            [
-                "gh",
-                "run",
-                "list",
-                "--workflow",
-                "deploy.yml",
-                "--limit",
-                str(limit),
-                "--json",
-                "databaseId,status,conclusion,displayTitle,headSha,updatedAt,url",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError:
-        return {**base, "error": "gh CLI not found in PATH", "runs": []}
-    if proc.returncode != 0:
-        return {**base, "error": "gh run list failed", "gh_stderr": proc.stderr.strip(), "runs": []}
-    return {**base, "runs": json.loads(proc.stdout or "[]")}
+    return deploy.status(name, limit)
 
 
 def _deploy_logs(run_id: str, tail: int, root: str) -> dict:
     """CLI wrapper for `repo_deploy_logs` — fetch failed-step logs of a run."""
     name = deploy.repo_name(Path(root), None)
-    try:
-        proc = subprocess.run(  # noqa: S603 — argv list, no shell
-            ["gh", "run", "view", run_id, "--repo", f"astrojones/{name}", "--log-failed"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except FileNotFoundError:
-        return {"repo": name, "run_id": run_id, "error": "gh CLI not found in PATH"}
-    if proc.returncode != 0:
-        return {
-            "repo": name,
-            "run_id": run_id,
-            "error": "gh run view failed",
-            "gh_stderr": proc.stderr.strip(),
-            "logs": proc.stdout[-8000:] if proc.stdout else "",
-        }
-    return {
-        "repo": name,
-        "run_id": run_id,
-        "logs": "\n".join(proc.stdout.splitlines()[-tail:]),
-    }
+    return deploy.logs(name, run_id, tail)
 
 
 def main(argv: list[str] | None = None) -> int:

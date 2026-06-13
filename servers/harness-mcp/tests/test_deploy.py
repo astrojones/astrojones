@@ -13,6 +13,7 @@ build small app repos with the four deploy files and assert findings.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,7 @@ def deployable_repo(repo: Path) -> Path:
     )
     # docker-compose.yml
     (repo / "docker-compose.yml").write_text(
-        f"services:\n  web:\n    image: ghcr.io/astrojones/{name}:latest\n    expose:\n      - \"8080\"\n"
+        f'services:\n  web:\n    image: ghcr.io/astrojones/{name}:latest\n    expose:\n      - "8080"\n'
     )
     # .nuklaut/deployment.yml
     (repo / ".nuklaut").mkdir()
@@ -82,8 +83,7 @@ def test_deploy_validate_detects_placeholder(monkeypatch, repo):
     (repo / ".nuklaut" / "deployment.yml").write_text("apiVersion: nuk/v1\nkind: Deployment\nmetadata:\n  name: x\n")
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
@@ -96,7 +96,7 @@ def test_deploy_validate_detects_placeholder(monkeypatch, repo):
 def test_deploy_validate_detects_three_segment_image(monkeypatch, repo):
     """An image path with three segments (repo/repo) is the most common mistake."""
     (repo / "docker-compose.yml").write_text(
-        "services:\n  web:\n    image: ghcr.io/astrojones/repo/repo:latest\n    expose:\n      - \"8080\"\n"
+        'services:\n  web:\n    image: ghcr.io/astrojones/repo/repo:latest\n    expose:\n      - "8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
@@ -105,8 +105,7 @@ def test_deploy_validate_detects_three_segment_image(monkeypatch, repo):
     )
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
@@ -119,75 +118,63 @@ def test_deploy_validate_detects_three_segment_image(monkeypatch, repo):
 def test_deploy_validate_detects_ports_keyword(monkeypatch, repo):
     """`ports:` in compose is forbidden (Traefik routes internally)."""
     (repo / "docker-compose.yml").write_text(
-        "services:\n  web:\n    image: ghcr.io/astrojones/x:latest\n    ports:\n      - \"8080:8080\"\n"
+        'services:\n  web:\n    image: ghcr.io/astrojones/x:latest\n    ports:\n      - "8080:8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
     (repo / ".nuklaut" / "deployment.yml").write_text("apiVersion: nuk/v1\nkind: Deployment\nmetadata:\n  name: x\n")
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
     assert result["ok"] is False
-    assert any(
-        f["code"] == "compose-forbidden" and "ports" in f["message"]
-        for f in result["findings"]
-    )
+    assert any(f["code"] == "compose-forbidden" and "ports" in f["message"] for f in result["findings"])
 
 
 def test_deploy_validate_detects_traefik_labels(monkeypatch, repo):
     """`traefik.*` labels are forbidden (nuk generates routing from spec.ingress)."""
     (repo / "docker-compose.yml").write_text(
         "services:\n  web:\n    image: ghcr.io/astrojones/x:latest\n"
-        "    labels:\n      traefik.enable: \"true\"\n    expose:\n      - \"8080\"\n"
+        '    labels:\n      traefik.enable: "true"\n    expose:\n      - "8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
     (repo / ".nuklaut" / "deployment.yml").write_text("apiVersion: nuk/v1\nkind: Deployment\nmetadata:\n  name: x\n")
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
     assert result["ok"] is False
-    assert any(
-        f["code"] == "compose-forbidden" and "traefik" in f["message"]
-        for f in result["findings"]
-    )
+    assert any(f["code"] == "compose-forbidden" and "traefik" in f["message"] for f in result["findings"])
 
 
 def test_deploy_validate_detects_container_name(monkeypatch, repo):
     """`container_name:` collides with nuk's per-deploy project naming."""
     (repo / "docker-compose.yml").write_text(
         "services:\n  web:\n    image: ghcr.io/astrojones/x:latest\n"
-        "    container_name: my-app\n    expose:\n      - \"8080\"\n"
+        '    container_name: my-app\n    expose:\n      - "8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
     (repo / ".nuklaut" / "deployment.yml").write_text("apiVersion: nuk/v1\nkind: Deployment\nmetadata:\n  name: x\n")
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
     assert result["ok"] is False
-    assert any(
-        f["code"] == "compose-forbidden" and "container_name" in f["message"]
-        for f in result["findings"]
-    )
+    assert any(f["code"] == "compose-forbidden" and "container_name" in f["message"] for f in result["findings"])
 
 
 def test_deploy_validate_detects_wrong_manifest_name(monkeypatch, repo):
     """metadata.name must equal the repo name (runner + secrets path derive from it)."""
     (repo / "docker-compose.yml").write_text(
-        f"services:\n  web:\n    image: ghcr.io/astrojones/{repo.name}:latest\n    expose:\n      - \"8080\"\n"
+        f'services:\n  web:\n    image: ghcr.io/astrojones/{repo.name}:latest\n    expose:\n      - "8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
@@ -196,22 +183,18 @@ def test_deploy_validate_detects_wrong_manifest_name(monkeypatch, repo):
     )
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "deploy.yml").write_text(
-        "jobs:\n  deploy:\n"
-        "    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
+        "jobs:\n  deploy:\n    uses: astrojones/.github/.github/workflows/nuk-deploy.yml@main\n"
     )
     monkeypatch.chdir(repo)
     result = server.repo_deploy_validate()
     assert result["ok"] is False
-    assert any(
-        f["code"] == "manifest-name" and f["level"] == "error"
-        for f in result["findings"]
-    )
+    assert any(f["code"] == "manifest-name" and f["level"] == "error" for f in result["findings"])
 
 
 def test_deploy_validate_detects_stale_workflow_ref(monkeypatch, repo):
     """deploy.yml must call the org reusable workflow (not a stale ref)."""
     (repo / "docker-compose.yml").write_text(
-        f"services:\n  web:\n    image: ghcr.io/astrojones/{repo.name}:latest\n    expose:\n      - \"8080\"\n"
+        f'services:\n  web:\n    image: ghcr.io/astrojones/{repo.name}:latest\n    expose:\n      - "8080"\n'
     )
     (repo / "Dockerfile").write_text("FROM scratch\nEXPOSE 8080\n")
     (repo / ".nuklaut").mkdir()
@@ -265,3 +248,56 @@ def test_deploy_logs_accepts_run_id(deployable_repo, monkeypatch, capsys):
     result = server.repo_deploy_logs(run_id="12345")
     assert result["repo"] == deployable_repo.name
     assert "logs" in result or "error" in result  # structured either way
+
+
+# ---------------------------------------------------------------------------
+# CLI <-> MCP error-shape parity (issue #5 M1)
+# ---------------------------------------------------------------------------
+
+
+_REAL_RUN = subprocess.run
+
+
+def _gh_not_found(*args, **kwargs):
+    """subprocess.run stub: raise FileNotFoundError only for the gh argv.
+
+    Patching ``subprocess.run`` is global (all modules share the one module
+    object), so git calls — used by ``git.repo_root`` and ``deploy.repo_name``
+    for repo detection — must pass through to the real implementation. Only
+    the gh argv simulates a host without ``gh`` installed.
+    """
+    argv = args[0] if args else kwargs.get("args", [])
+    if argv and argv[0] == "gh":
+        msg = "gh"
+        raise FileNotFoundError(msg)
+    return _REAL_RUN(*args, **kwargs)
+
+
+def test_deploy_status_cli_mcp_parity_on_gh_missing(deployable_repo, monkeypatch):
+    """CLI _deploy_status and MCP repo_deploy_status share an error shape."""
+    from repo_agent_harness import cli
+    from repo_agent_harness import deploy as deploy_mod
+
+    monkeypatch.chdir(deployable_repo)
+    monkeypatch.setattr(deploy_mod.subprocess, "run", _gh_not_found)
+
+    cli_res = cli._deploy_status(5, str(deployable_repo))
+    mcp_res = server.repo_deploy_status()
+    assert set(cli_res) == set(mcp_res), (set(cli_res), set(mcp_res))
+    assert "hint" in cli_res
+    assert cli_res["app_url"] == mcp_res["app_url"]
+    assert cli_res["image"] == mcp_res["image"]
+
+
+def test_deploy_logs_cli_mcp_parity_on_gh_missing(deployable_repo, monkeypatch):
+    """CLI _deploy_logs and MCP repo_deploy_logs share an error shape."""
+    from repo_agent_harness import cli
+    from repo_agent_harness import deploy as deploy_mod
+
+    monkeypatch.chdir(deployable_repo)
+    monkeypatch.setattr(deploy_mod.subprocess, "run", _gh_not_found)
+
+    cli_res = cli._deploy_logs("12345", 200, str(deployable_repo))
+    mcp_res = server.repo_deploy_logs(run_id="12345")
+    assert set(cli_res) == set(mcp_res), (set(cli_res), set(mcp_res))
+    assert "hint" in cli_res

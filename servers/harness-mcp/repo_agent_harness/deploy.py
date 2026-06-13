@@ -15,6 +15,7 @@ Exit 0 = deployable (warnings allowed), 1 = rule violations, 2 = cannot run.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -52,6 +53,91 @@ def repo_name(root: Path, override: str | None) -> str:
     except (OSError, subprocess.TimeoutExpired):
         pass
     return root.resolve().name
+
+
+def status(name: str, limit: int) -> dict:
+    """Recent deploy runs + the app's published URL for repo ``name``.
+
+    Shared by ``repo_deploy_status`` (MCP) and the ``deploy-status`` CLI so the
+    error shapes never drift. Thin wrapper over ``gh run list`` — never raises:
+    returns a structured ``{error, hint}`` on missing/unauthenticated ``gh``.
+    """
+    base = {
+        "repo": name,
+        "app_url": f"https://{name}.astrojones.de",
+        "image": f"ghcr.io/astrojones/{name}:latest",
+    }
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            [
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                "deploy.yml",
+                "--limit",
+                str(limit),
+                "--json",
+                "databaseId,status,conclusion,displayTitle,headSha,updatedAt,url",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            **base,
+            "error": "gh CLI not found in PATH",
+            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
+            "runs": [],
+        }
+    if proc.returncode != 0:
+        return {
+            **base,
+            "error": "gh run list failed",
+            "gh_stderr": proc.stderr.strip(),
+            "hint": "Run `gh auth status` to check authentication.",
+            "runs": [],
+        }
+    return {**base, "runs": json.loads(proc.stdout or "[]")}
+
+
+def logs(name: str, run_id: str, tail: int) -> dict:
+    """Failed-step logs of a deploy run for repo ``name``.
+
+    Shared by ``repo_deploy_logs`` (MCP) and the ``deploy-logs`` CLI. Thin
+    wrapper over ``gh run view --log-failed`` — never raises; returns a
+    structured error on missing gh / unauthenticated / run-not-found.
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            ["gh", "run", "view", run_id, "--repo", f"astrojones/{name}", "--log-failed"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "repo": name,
+            "run_id": run_id,
+            "error": "gh CLI not found in PATH",
+            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
+        }
+    if proc.returncode != 0:
+        return {
+            "repo": name,
+            "run_id": run_id,
+            "error": "gh run view failed",
+            "gh_stderr": proc.stderr.strip(),
+            "logs": proc.stdout[-8000:] if proc.stdout else "",  # last chunk on partial success
+        }
+    return {
+        "repo": name,
+        "run_id": run_id,
+        "logs": "\n".join(proc.stdout.splitlines()[-tail:]),
+    }
 
 
 def iter_text_files(root: Path):
@@ -145,9 +231,7 @@ def parse_manifest(text: str) -> dict:
         ms = re.search(r"service:\s*([A-Za-z0-9_-]+)", item)
         mp = re.search(r"port:\s*[\"']?(\d+)", item)
         if ms or mp:
-            out["ingress"].append(
-                {"service": ms.group(1) if ms else None, "port": mp.group(1) if mp else None}
-            )
+            out["ingress"].append({"service": ms.group(1) if ms else None, "port": mp.group(1) if mp else None})
     return out
 
 
@@ -168,11 +252,7 @@ def validate(root: Path, repo: str) -> dict:
         err("root", f"{root} is not a directory")
         return {"ok": False, "repo": repo, "root": str(root), "findings": findings}
 
-    hits = [
-        f"{path.relative_to(root)}"
-        for path, text in iter_text_files(root)
-        if PLACEHOLDER_RE.search(text)
-    ]
+    hits = [f"{path.relative_to(root)}" for path, text in iter_text_files(root) if PLACEHOLDER_RE.search(text)]
     if hits:
         err("placeholder", f"unreplaced template placeholder in: {', '.join(hits[:10])}")
     else:

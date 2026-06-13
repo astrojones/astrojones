@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -342,49 +341,7 @@ def repo_deploy_status(
     if not rootp:
         return _no_repo()
     name = deploy.repo_name(Path(rootp), None)
-    try:
-        proc = subprocess.run(  # noqa: S603 — argv list, no shell
-            [
-                "gh",
-                "run",
-                "list",
-                "--workflow",
-                "deploy.yml",
-                "--limit",
-                str(limit),
-                "--json",
-                "databaseId,status,conclusion,displayTitle,headSha,updatedAt,url",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError:
-        return {
-            "repo": name,
-            "app_url": f"https://{name}.astrojones.de",
-            "image": f"ghcr.io/astrojones/{name}:latest",
-            "error": "gh CLI not found in PATH",
-            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
-            "runs": [],
-        }
-    if proc.returncode != 0:
-        return {
-            "repo": name,
-            "app_url": f"https://{name}.astrojones.de",
-            "image": f"ghcr.io/astrojones/{name}:latest",
-            "error": "gh run list failed",
-            "gh_stderr": proc.stderr.strip(),
-            "hint": "Run `gh auth status` to check authentication.",
-            "runs": [],
-        }
-    return {
-        "repo": name,
-        "app_url": f"https://{name}.astrojones.de",
-        "image": f"ghcr.io/astrojones/{name}:latest",
-        "runs": json.loads(proc.stdout or "[]"),
-    }
+    return deploy.status(name, limit)
 
 
 @mcp.tool()
@@ -401,42 +358,7 @@ def repo_deploy_logs(
     if not rootp:
         return _no_repo()
     name = deploy.repo_name(Path(rootp), None)
-    try:
-        proc = subprocess.run(  # noqa: S603 — argv list, no shell
-            [
-                "gh",
-                "run",
-                "view",
-                run_id,
-                "--repo",
-                f"astrojones/{name}",
-                "--log-failed",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except FileNotFoundError:
-        return {
-            "repo": name,
-            "run_id": run_id,
-            "error": "gh CLI not found in PATH",
-            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
-        }
-    if proc.returncode != 0:
-        return {
-            "repo": name,
-            "run_id": run_id,
-            "error": "gh run view failed",
-            "gh_stderr": proc.stderr.strip(),
-            "logs": proc.stdout[-8000:] if proc.stdout else "",  # last chunk on partial success
-        }
-    return {
-        "repo": name,
-        "run_id": run_id,
-        "logs": "\n".join(proc.stdout.splitlines()[-tail:]),
-    }
+    return deploy.logs(name, run_id, tail)
 
 
 # ----------------------------------------------------------------------- resources
