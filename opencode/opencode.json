@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["./plugin/astrojones-dev.ts"],
+  "mcp": {
+    "repo-agent-harness": {
+      "type": "local",
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "./servers/harness-mcp",
+        "repo-agent-harness-mcp"
+      ],
+      "enabled": true
+    }
+  },
+  "skills": {
+    "paths": ["./skills"]
+  }
+}
