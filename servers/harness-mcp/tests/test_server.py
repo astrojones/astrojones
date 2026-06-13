@@ -3,6 +3,15 @@ import json
 from repo_agent_harness import server
 
 
+def test_server_instructions_present():
+    """The server ships concise, client-agnostic orientation cues."""
+    text = server.mcp.instructions
+    assert text
+    assert "repo_context_overview" in text
+    assert "AGENTS.md" in text
+    assert "repo_verify_changed" in text
+
+
 def test_tool_functions_callable(repo, monkeypatch):
     monkeypatch.chdir(repo)
     assert server.repo_context_overview()["root"] == str(repo)

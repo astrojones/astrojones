@@ -62,7 +62,21 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
             await _serena.aclose()
 
 
-mcp = FastMCP("repo-agent-harness", lifespan=_lifespan)
+_INSTRUCTIONS = """\
+Safe, repo-aware tools for the git repo at the current working directory: repo facts
+(repo_* tools) and semantic code navigation (serena_* tools, launched on first use —
+call serena_initial_instructions before symbol work).
+
+- Call repo_context_overview first. If its `harness` block reports harnessed=true, the
+  repo carries an AGENTS.md "Working in this repo" section — read it for the full workflow.
+- Prefer serena_* for symbols and repo_search_*/repo_read_range for files over reading
+  whole files; read precise ranges, never dump whole trees.
+- Run repo_verify_changed on the files you changed before declaring work done.
+- Shell is policy-bounded: destructive commands and secret-file reads are blocked; git
+  push and database migrations need confirmation. Check repo_policy_check_command if unsure.
+"""
+
+mcp = FastMCP("repo-agent-harness", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 
 for _proxied in gateway.proxied_tools(_serena):
     mcp.add_tool(_proxied)

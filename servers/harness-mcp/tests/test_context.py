@@ -9,6 +9,41 @@ def test_overview(repo):
     assert any("pyproject" in p for p in ov["package_managers"])
 
 
+def test_overview_harness_absent(repo):
+    """A bare repo is not harnessed and surfaces no harness inventory."""
+    h = context.overview(str(repo))["harness"]
+    assert h["harnessed"] is False
+    assert h["guide"] is None
+    assert h["policies"] == []
+    assert h["tools"] == []
+    assert h["agents"] == []
+    assert h["skills"] == []
+
+
+def test_overview_harness_present(repo):
+    """When agent/ + the AGENTS.md workflow section + plugin dirs exist, surface them."""
+    from repo_agent_harness import scaffold
+
+    (repo / "AGENTS.md").write_text(f"# guide\n{scaffold.SECTION_BEGIN}\nworkflow\n{scaffold.SECTION_END}\n")
+    (repo / "agent" / "policies").mkdir(parents=True)
+    (repo / "agent" / "policies" / "shell.yml").write_text("rules: []\n")
+    (repo / "agent" / "tools").mkdir()
+    (repo / "agent" / "tools" / "safe-diff").write_text("#!/bin/sh\n")
+    (repo / "agents").mkdir()
+    (repo / "agents" / "fullstack-architect.md").write_text("---\nname: x\n---\n")
+    (repo / "agents" / "_base.md").write_text("ignored: leading underscore\n")
+    (repo / "skills").mkdir()
+    (repo / "skills" / "nuklaut-deploy").mkdir()
+
+    h = context.overview(str(repo))["harness"]
+    assert h["harnessed"] is True
+    assert h["guide"] == "AGENTS.md"
+    assert h["policies"] == ["shell"]
+    assert h["tools"] == ["safe-diff"]
+    assert h["agents"] == ["fullstack-architect"]
+    assert h["skills"] == ["nuklaut-deploy"]
+
+
 def test_read_range_ok(repo):
     out = context.read_range(str(repo), "src/payment.py", 1, 2)
     assert "def charge" in out["content"]

@@ -102,6 +102,46 @@ def _top_level_dirs(rootp: Path) -> list[str]:
     return out[:20]
 
 
+def _entry_names(d: Path, *, dirs: bool, suffix: str = "") -> list[str]:
+    """Sorted names of files (stem) or dirs directly under ``d``; skips dot/underscore entries."""
+    if not d.is_dir():
+        return []
+    out = [
+        c.stem if (suffix and not dirs) else c.name
+        for c in d.iterdir()
+        if (c.is_dir() if dirs else c.is_file())
+        and not c.name.startswith((".", "_"))
+        and (c.suffix == suffix if (suffix and not dirs) else True)
+    ]
+    return sorted(out)
+
+
+def _harness_summary(rootp: Path) -> dict:
+    """Surface the repo-carried harness inventory — pulled on demand, never ambient.
+
+    ``guide`` points at AGENTS.md only when it carries the workflow section, so a client
+    knows to read it. ``agents``/``skills`` are present only in plugin checkouts; scaffolded
+    target repos carry ``agent/`` (policies + tools) but no plugin dirs, and list empty.
+    """
+    from repo_agent_harness import scaffold
+
+    agents_md = rootp / "AGENTS.md"
+    guide = None
+    if agents_md.is_file():
+        text = agents_md.read_text(errors="ignore")
+        if scaffold.SECTION_BEGIN in text and scaffold.SECTION_END in text:
+            guide = "AGENTS.md"
+    agent = rootp / "agent"
+    return {
+        "harnessed": guide is not None or agent.is_dir(),
+        "guide": guide,
+        "policies": _entry_names(agent / "policies", dirs=False, suffix=".yml"),
+        "tools": _entry_names(agent / "tools", dirs=False),
+        "agents": _entry_names(rootp / "agents", dirs=False, suffix=".md"),
+        "skills": _entry_names(rootp / "skills", dirs=True),
+    }
+
+
 def overview(root: str) -> dict:
     """Summarize the repo: languages, package managers, entrypoints, important paths, available tools."""
     files = git.list_files(root)
@@ -127,6 +167,7 @@ def overview(root: str) -> dict:
         "entrypoints": manifest.get("entrypoints") or entrypoints,
         "important_paths": manifest.get("important_paths") or _top_level_dirs(rootp),
         "available_tools": available,
+        "harness": _harness_summary(rootp),
     }
 
 
