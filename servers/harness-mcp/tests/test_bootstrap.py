@@ -248,6 +248,33 @@ def test_auto_bootstrap_respects_agents_md_opt_out_sentinel(repo):
     assert not (repo / "AGENTS.md").is_file(), "AGENTS.md suppressed by the opt-out sentinel"
 
 
+def test_auto_bootstrap_fails_open_on_malformed_repo(repo):
+    """A pre-existing malformed .opencode/opencode.json must not crash the server.
+
+    _auto_bootstrap runs in the lifespan before yield, so any exception there would take
+    down the whole harness server for the session. Malformed JSON raises JSONDecodeError
+    (a ValueError, not OSError), so the connect-time path must swallow broadly and fail open.
+    """
+    from repo_agent_harness import server
+
+    (repo / ".opencode").mkdir()
+    (repo / ".opencode" / "opencode.json").write_text("{ this is not valid json")
+    server._auto_bootstrap(repo)  # must not raise
+    assert (repo / "agent").is_dir(), "the Claude-side agent/ tree still installs"
+
+
+def test_repo_bootstrap_tool_surfaces_errors(repo, monkeypatch):
+    """The explicit tool does NOT swallow (only the connect-time path does) — errors surface."""
+    import pytest
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(repo)
+    (repo / ".opencode").mkdir()
+    (repo / ".opencode" / "opencode.json").write_text("{ this is not valid json")
+    with pytest.raises(ValueError):  # JSONDecodeError is a ValueError
+        server.repo_bootstrap()
+
+
 # ---------------------------------------------------------------------------
 # opencode skills.paths convergence — the plugin rewrites the sentinel, so a
 # re-bootstrap must NOT re-emit it or duplicate the resolved path (issue #5 S1)

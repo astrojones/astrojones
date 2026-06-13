@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -64,8 +65,10 @@ def _auto_bootstrap(root: Path) -> None:
     surfaces errors when called directly.
     """
     agents_md = "skip" if (root / _AGENTS_MD_OPT_OUT).exists() else "auto"
-    with suppress(OSError):
+    try:
         scaffold.bootstrap_repo(str(root), target="both", agents_md=agents_md)
+    except Exception as exc:  # noqa: BLE001 — fail-open: runs in the lifespan before yield, so a bootstrap error here must never break server startup (e.g. a pre-existing malformed .opencode/opencode.json raises ValueError, not OSError)
+        logging.getLogger(__name__).warning("auto-bootstrap skipped for %s: %s", root, exc)
 
 
 @asynccontextmanager
