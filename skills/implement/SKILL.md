@@ -75,9 +75,10 @@ phase. Resolve all paths from the working root — never hardcode absolutes.
 
 ### 0.2 Blast radius
 
-Dispatch the **`context-scout`** subagent to map the relevant files and symbols, and run
-`repo_impact_file` on the likely targets. Know what you're about to touch — especially for
-auth, schema/migration, or exported-symbol changes.
+Dispatch the **`explorer`** subagent in scout/breadth mode to map the relevant files and
+symbols (a focused reading list for the blast radius), and run `repo_impact_file` on the
+likely targets. Know what you're about to touch — especially for auth, schema/migration, or
+exported-symbol changes.
 
 ---
 
@@ -100,8 +101,8 @@ Score yourself against this rubric:
 4. **Root cause** (for bugfixes) — the actual cause is identified, not a symptom.
 
 **Gate:** ≥90% → proceed and run autonomously to completion. 70–89% → ask 1–2 targeted
-questions (`AskUserQuestion`) or invoke `superpowers:brainstorming`, then re-score. <70% →
-stop and request context.
+questions (`AskUserQuestion`) — or, if the `superpowers` plugin is available, invoke
+`superpowers:brainstorming` — then re-score. <70% → stop and request context.
 
 ---
 
@@ -175,7 +176,9 @@ to direct tools.
    newly-written tests; test count did not shrink unexpectedly.
 3. Review `repo_diff_current` once more for scope creep — revert anything outside the spec.
 4. On cleanup opportunities (duplication, over-engineering), tighten now while tests are green.
-5. On failure: fix, max 2 rounds. Still failing → `superpowers:systematic-debugging`.
+5. On failure: fix, max 2 rounds. Still failing → escalate to deeper root-cause analysis
+   (the `superpowers:systematic-debugging` skill if available; otherwise form one hypothesis
+   at a time, add a failing test that isolates it, then fix).
 
 ---
 

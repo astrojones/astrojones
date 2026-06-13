@@ -28,8 +28,8 @@ needs you to have accepted your org invite.)
 | `deploy-doctor` | Agent | Diagnoses a red `deploy` run or a 502: runs `deploy-validate` for the mechanical checks, pulls the run logs, and maps the failure to a root cause + concrete fix. |
 | `template/_shared/agent/tools/` | Repo-carried tools | `deploy-validate` (the hard rules as a tested checker), `deploy-status`, `deploy-logs` — copied into every app, runnable by any assistant or CI, no SSH. Tested in this repo: `uv run pytest`. |
 | `bugfix`, `feature`, `refactor`, `test`, `implement`, `commit-semantic` | Skills | The [repo-agent-harness](https://github.com/astrojones/repo-agent-harness) coding workflows (the harness repo itself is plugin-free; its Claude Code surface lives here). |
-| `context-scout`, `implementer`, `reviewer`, `test-runner` | Agents | The harness workflow subagents (scoping, TDD streams, diff review, narrow verification). |
-| `context-explorer` | Agent | Serena-first deep exploration of an unfamiliar code region: symbol hierarchy, call edges, data flow — compact cited summary, hard read budget, no full-file dumps. |
+| `implementer`, `reviewer`, `test-runner` | Agents | The harness workflow subagents (TDD streams, diff review, narrow verification). |
+| `explorer` | Agent | Read-only Serena-first symbol navigation and deep exploration of a code region — two modes (scout breadth / explore depth), hard read budget, cited summaries, no full-file dumps. Hands edits to `implementer`. |
 | `hooks/` | Hooks | Safe-shell + secret-read guard piped through the *repo's own* sha-pinned harness (`repo-agent-harness hook pre-tool-use`, fail-open shim) + post-edit verification nudge. |
 | `/harness-init` | Command | Scaffolds the harness (agent/, AGENTS.md, sha-pinned `.mcp.json`) into any existing repo — the generic version of what `/new-app` does automatically. |
 
