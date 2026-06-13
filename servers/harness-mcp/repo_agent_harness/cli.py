@@ -18,6 +18,7 @@ from repo_agent_harness import (
     health,
     impact,
     policies,
+    prompts_registry,
     scaffold,
     verify,
 )
@@ -118,11 +119,45 @@ def main(argv: list[str] | None = None) -> int:
         help="Claude Code hook handler: read the event JSON on stdin, print the decision (always exits 0)",
     )
     sp.add_argument("event", choices=["pre-tool-use", "post-tool-use"])
+    sp = sub.add_parser(
+        "prompt",
+        parents=[common],
+        help="Inspect the per-repo workflow prompts SSOT (works without a git repo)",
+    )
+    prompt_sub = sp.add_subparsers(dest="prompt_cmd", required=True)
+    prompt_sub.add_parser("list", parents=[common], help="List registered prompt names")
+    sp_get = prompt_sub.add_parser("get", parents=[common], help="Print a single prompt body as JSON")
+    sp_get.add_argument("name", help="Prompt identifier (e.g. 'bugfix', 'harness-init')")
 
     args = p.parse_args(argv)
 
     if args.cmd == "hook":  # before _root(): the hook must fail open outside a repo too
         return _hook(args.event)
+
+    if args.cmd == "prompt":  # before _root(): prompts are package-local, no repo needed
+        if args.prompt_cmd == "list":
+            data = {"ok": True, "prompts": prompts_registry.list_names()}
+        else:  # get
+            entry = prompts_registry.get(args.name)
+            if entry is None:
+                data = {
+                    "ok": False,
+                    "name": args.name,
+                    "error": f"unknown prompt: {args.name!r}",
+                    "available": prompts_registry.list_names(),
+                }
+            else:
+                data = {
+                    "ok": True,
+                    "name": entry.name,
+                    "title": entry.title,
+                    "description": entry.description,
+                    "body": entry.body,
+                    "source": entry.source,
+                    "checksum": entry.checksum,
+                }
+        print(json.dumps(data, indent=2))
+        return 1 if isinstance(data, dict) and data.get("ok") is False else 0
 
     root = _root()
 
