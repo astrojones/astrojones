@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
+from pathlib import Path
 
 from repo_agent_harness import (
     agent_hooks,
     context,
+    deploy,
     gateway,
     git,
     health,
@@ -45,6 +48,67 @@ def _hook(event: str) -> int:
         out = {}
     print(json.dumps(out))
     return 0
+
+
+def _deploy_status(limit: int, root: str) -> dict:
+    """CLI wrapper for `repo_deploy_status` — list recent deploy runs."""
+    name = deploy.repo_name(Path(root), None)
+    base = {
+        "repo": name,
+        "app_url": f"https://{name}.astrojones.de",
+        "image": f"ghcr.io/astrojones/{name}:latest",
+    }
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            [
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                "deploy.yml",
+                "--limit",
+                str(limit),
+                "--json",
+                "databaseId,status,conclusion,displayTitle,headSha,updatedAt,url",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {**base, "error": "gh CLI not found in PATH", "runs": []}
+    if proc.returncode != 0:
+        return {**base, "error": "gh run list failed", "gh_stderr": proc.stderr.strip(), "runs": []}
+    return {**base, "runs": json.loads(proc.stdout or "[]")}
+
+
+def _deploy_logs(run_id: str, tail: int, root: str) -> dict:
+    """CLI wrapper for `repo_deploy_logs` — fetch failed-step logs of a run."""
+    name = deploy.repo_name(Path(root), None)
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            ["gh", "run", "view", run_id, "--repo", f"astrojones/{name}", "--log-failed"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"repo": name, "run_id": run_id, "error": "gh CLI not found in PATH"}
+    if proc.returncode != 0:
+        return {
+            "repo": name,
+            "run_id": run_id,
+            "error": "gh run view failed",
+            "gh_stderr": proc.stderr.strip(),
+            "logs": proc.stdout[-8000:] if proc.stdout else "",
+        }
+    return {
+        "repo": name,
+        "run_id": run_id,
+        "logs": "\n".join(proc.stdout.splitlines()[-tail:]),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,6 +160,14 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--context-lines", type=int, default=3)
     sp = sub.add_parser("check-command", parents=[common])
     sp.add_argument("command")
+    sp = sub.add_parser("deploy-validate", parents=[common])
+    sp.add_argument("--root", default=None)
+    sp.add_argument("--repo", default=None)
+    sp = sub.add_parser("deploy-status", parents=[common])
+    sp.add_argument("--limit", type=int, default=5)
+    sp = sub.add_parser("deploy-logs", parents=[common])
+    sp.add_argument("run_id")
+    sp.add_argument("--tail", type=int, default=200)
     sub.add_parser(
         "gateway-snapshot",
         parents=[common],
@@ -198,6 +270,12 @@ def main(argv: list[str] | None = None) -> int:
         "test-changed": lambda: verify.test_changed(root),
         "diff": lambda: git.diff_current(root, args.context_lines),
         "check-command": lambda: policies.check_command(args.command, root).to_dict(),
+        "deploy-validate": lambda: deploy.validate(
+            Path(args.root) if args.root else Path(root),
+            args.repo or deploy.repo_name(Path(args.root) if args.root else Path(root), None),
+        ),
+        "deploy-status": lambda: _deploy_status(args.limit, root),
+        "deploy-logs": lambda: _deploy_logs(args.run_id, args.tail, root),
         "health": lambda: health.run(root, only=args.check, refresh=args.refresh).model_dump(),
         "gateway-snapshot": lambda: gateway.generate_snapshot(root),
         "init": lambda: scaffold.init_repo(
