@@ -1,0 +1,27 @@
+{
+  "name": "astrojones-dev-opencode",
+  "version": "0.6.0",
+  "type": "module",
+  "description": "opencode half of the astrojones-dev plugin: materializes workflow skills/commands/agents from the harness MCP server SSOT and wires the policy hook.",
+  "license": "MIT",
+  "main": "plugin/astrojones-dev.ts",
+  "exports": {
+    ".": {
+      "import": "./plugin/astrojones-dev.ts",
+      "types": "./plugin/astrojones-dev.ts"
+    }
+  },
+  "files": [
+    "plugin",
+    "opencode.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.15.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.15.13",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

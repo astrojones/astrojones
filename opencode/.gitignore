@@ -1,0 +1,4 @@
+# Derived at install time by opencode/plugin/astrojones-dev.ts — never commit
+skills/
+node_modules/
+dist/
