@@ -26,7 +26,17 @@ except ImportError as exc:  # pragma: no cover
     msg = "the 'fastmcp' package is required: uv add fastmcp"
     raise SystemExit(msg) from exc
 
-from repo_agent_harness import context, gateway, git, health, impact, policies, verify, watcher
+from repo_agent_harness import (
+    context,
+    gateway,
+    git,
+    health,
+    impact,
+    policies,
+    prompts_registry,
+    verify,
+    watcher,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -80,6 +90,13 @@ mcp = FastMCP("repo-agent-harness", instructions=_INSTRUCTIONS, lifespan=_lifesp
 
 for _proxied in gateway.proxied_tools(_serena):
     mcp.add_tool(_proxied)
+
+# Per-repo workflow prompts (SSOT). Claude Code clients see them via
+# ``prompts/list``; opencode clients (and any other MCP client that does not
+# surface raw prompts) read them through the ``repo_prompt_get`` tool wrapper
+# below. The bodies live in ``prompts/<name>.md`` and are loaded once at
+# import time by ``prompts_registry``.
+prompts_registry.register(mcp)
 
 
 def _no_repo() -> dict:
@@ -198,6 +215,41 @@ def repo_policy_check_command(
     """Check a shell command against the repo's policy BEFORE running it (deny/allow/confirm)."""
     root = git.repo_root()
     return policies.check_command(command, root).to_dict() if root else _no_repo()
+
+
+@mcp.tool()
+def repo_prompt_get(
+    name: Annotated[str, Field(description="Prompt identifier (e.g. 'bugfix', 'feature', 'harness-init')")],
+) -> dict:
+    """Return a registered prompt body plus source-of-truth metadata.
+
+    Most MCP clients surface prompts via ``prompts/list`` and ``prompts/get``;
+    this tool is a JSON-returning wrapper for clients (notably opencode) that
+    only surface MCP tools to the model. The body is the workflow itself —
+    assistant-agnostic, no per-client framing.
+
+    The ``source`` field is the path to the on-disk file relative to the
+    ``repo_agent_harness`` package root; the ``checksum`` is the SHA-256 of
+    the body. Drift-check tools compare the served body to the on-disk file
+    using these two fields.
+    """
+    entry = prompts_registry.get(name)
+    if entry is None:
+        return {
+            "ok": False,
+            "name": name,
+            "error": f"unknown prompt: {name!r}",
+            "available": prompts_registry.list_names(),
+        }
+    return {
+        "ok": True,
+        "name": entry.name,
+        "title": entry.title,
+        "description": entry.description,
+        "body": entry.body,
+        "source": entry.source,
+        "checksum": entry.checksum,
+    }
 
 
 # ----------------------------------------------------------------------- resources
