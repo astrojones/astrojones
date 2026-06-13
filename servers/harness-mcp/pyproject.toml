@@ -120,13 +120,34 @@ max-nested-blocks = 5
     "RET",
     "RUF029",
     "PT",
+    "TC003",  # tests use Path at runtime for fixture setup, not just typing
 ]
 # subprocess is the intentional safe wrapper — never shell=True, always argv list.
 "repo_agent_harness/shell.py" = ["S404", "S603"]
 # Module is named within the package namespace; stdlib secrets is never imported here.
 "repo_agent_harness/secrets.py" = ["A005", "D105"]
 # The MCP prompt named "test" is not a pytest test function.
-"repo_agent_harness/server.py" = ["PT028"]
+"repo_agent_harness/server.py" = [
+    "PT028",
+    "S404",  # subprocess module (used in deploy-status/logs tools)
+    "S607",  # partial executable path (gh is a PATH lookup by design)
+    "ARG001",  # FastMCP tools get an unused `root` ctx arg from the framework
+]
+# Deploy validators: subprocess calls (git/gh lookups on PATH are the contract),
+# the regex-constant alias re.M is the stdlib idiom, and the validate/parse
+# functions are unavoidably branchy — they encode the org's hard rules.
+"repo_agent_harness/deploy.py" = [
+    "S404",  # subprocess module
+    "S603",  # subprocess call (argv list, no shell)
+    "S607",  # partial executable path (git/gh are PATH lookups by design)
+    "FURB167",  # re.M is the stdlib idiom
+    "C901",  # complexity: rules are non-negotiable
+    "PLR0912",  # too many branches
+    "PLR0914",  # too many locals
+    "PLR0915",  # too many statements
+]
+# CLI subcommands dispatch through many lambdas; the function is unavoidably long.
+"repo_agent_harness/cli.py" = ["PLR0915", "S404", "S607"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

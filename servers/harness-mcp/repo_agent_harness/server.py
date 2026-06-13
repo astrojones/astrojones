@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -28,6 +29,7 @@ except ImportError as exc:  # pragma: no cover
 
 from repo_agent_harness import (
     context,
+    deploy,
     gateway,
     git,
     health,
@@ -268,6 +270,137 @@ def repo_bootstrap_status() -> dict:
     """
     root = git.repo_root()
     return scaffold.inspect_bootstrap(root) if root else _no_repo()
+
+
+@mcp.tool()
+def repo_deploy_validate(
+    root: Annotated[str | None, Field(description="Repo root (default: cwd)")] = None,
+    repo: Annotated[str | None, Field(description="Repo name override (default: origin URL)")] = None,
+) -> dict:
+    """Run the org's hard deploy-rule checks against the current repo.
+
+    Same logic as the plugin's ``agent/tools/deploy-validate`` shim, lifted
+    into the harness server so any MCP client (Claude, opencode, vanilla
+    Codex) can invoke it as a tool rather than spawning a subprocess.
+
+    Returns the standard ``{ok, repo, root, findings}`` dict; ``ok`` is
+    True iff no finding has ``level == "error"`` (warnings are allowed).
+    """
+    rootp = git.repo_root()
+    if not rootp:
+        return _no_repo()
+    return deploy.validate(Path(rootp), deploy.repo_name(Path(rootp), repo))
+
+
+@mcp.tool()
+def repo_deploy_status(
+    limit: Annotated[int, Field(ge=1, le=20, description="How many runs to fetch")] = 5,
+) -> dict:
+    """List the recent deploy workflow runs and the app's published URL.
+
+    Thin wrapper over ``gh run list`` (no SSH). If ``gh`` is not installed
+    or not authenticated, returns a structured ``{error, hint}`` instead
+    of raising — the model can surface the hint to the user.
+    """
+    rootp = git.repo_root()
+    if not rootp:
+        return _no_repo()
+    name = deploy.repo_name(Path(rootp), None)
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            [
+                "gh",
+                "run",
+                "list",
+                "--workflow",
+                "deploy.yml",
+                "--limit",
+                str(limit),
+                "--json",
+                "databaseId,status,conclusion,displayTitle,headSha,updatedAt,url",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "repo": name,
+            "app_url": f"https://{name}.astrojones.de",
+            "image": f"ghcr.io/astrojones/{name}:latest",
+            "error": "gh CLI not found in PATH",
+            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
+            "runs": [],
+        }
+    if proc.returncode != 0:
+        return {
+            "repo": name,
+            "app_url": f"https://{name}.astrojones.de",
+            "image": f"ghcr.io/astrojones/{name}:latest",
+            "error": "gh run list failed",
+            "gh_stderr": proc.stderr.strip(),
+            "hint": "Run `gh auth status` to check authentication.",
+            "runs": [],
+        }
+    return {
+        "repo": name,
+        "app_url": f"https://{name}.astrojones.de",
+        "image": f"ghcr.io/astrojones/{name}:latest",
+        "runs": json.loads(proc.stdout or "[]"),
+    }
+
+
+@mcp.tool()
+def repo_deploy_logs(
+    run_id: Annotated[str, Field(description="GitHub Actions run id (from repo_deploy_status)")],
+    tail: Annotated[int, Field(ge=1, le=5000, description="Number of log lines to return")] = 200,
+) -> dict:
+    """Fetch the failed-step logs of a deploy run.
+
+    Thin wrapper over ``gh run view --log-failed``. Returns structured error
+    on missing gh / unauthenticated / run-not-found — never raises.
+    """
+    rootp = git.repo_root()
+    if not rootp:
+        return _no_repo()
+    name = deploy.repo_name(Path(rootp), None)
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            [
+                "gh",
+                "run",
+                "view",
+                run_id,
+                "--repo",
+                f"astrojones/{name}",
+                "--log-failed",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "repo": name,
+            "run_id": run_id,
+            "error": "gh CLI not found in PATH",
+            "hint": "Install gh: https://cli.github.com/, then `gh auth login`.",
+        }
+    if proc.returncode != 0:
+        return {
+            "repo": name,
+            "run_id": run_id,
+            "error": "gh run view failed",
+            "gh_stderr": proc.stderr.strip(),
+            "logs": proc.stdout[-8000:] if proc.stdout else "",  # last chunk on partial success
+        }
+    return {
+        "repo": name,
+        "run_id": run_id,
+        "logs": "\n".join(proc.stdout.splitlines()[-tail:]),
+    }
 
 
 # ----------------------------------------------------------------------- resources

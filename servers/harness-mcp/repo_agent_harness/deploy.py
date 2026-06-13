@@ -1,0 +1,266 @@
+"""Validate this repo's nuklaut deploy files against the org's hard rules.
+
+Lifted from the plugin's ``template/_shared/agent/tools/deploy-validate``
+script and adapted for direct import (no longer needs to be ``python3 script.py``).
+The rules match the ``nuklaut-deploy`` skill exactly; this is the programmatic
+form the same checks take when invoked via ``repo_deploy_validate`` MCP tool
+or ``repo-agent-harness deploy-validate`` CLI subcommand.
+
+Self-contained (stdlib only) so it works in any scaffolded app — Python or
+Node — with no project env. Line-based parsing targets the org template
+shape; full-line comments are ignored.
+
+Exit 0 = deployable (warnings allowed), 1 = rule violations, 2 = cannot run.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+# Built by concatenation so this file never contains the literal tokens it hunts.
+PLACEHOLDER_RE = re.compile("__" + "REPO_" + "(NAME|PKG)" + "__")
+WORKFLOW_REF = "astrojones/.github/.github/workflows/nuk-deploy.yml"
+SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".serena", ".pytest_cache"}
+
+
+def _lines(text: str) -> list[str]:
+    """Lines with full-line comments dropped (template files comment heavily)."""
+    return [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+
+
+def _strip_inline_comment(line: str) -> str:
+    return line.split("#", 1)[0]
+
+
+def repo_name(root: Path, override: str | None) -> str:
+    """The repo name, in priority order: override > origin URL > dir name."""
+    if override:
+        return override
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        url = proc.stdout.strip()
+        if proc.returncode == 0 and url:
+            return Path(url.rstrip("/")).name.removesuffix(".git")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return root.resolve().name
+
+
+def iter_text_files(root: Path):
+    """Yield (path, text) for every readable text file under root."""
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or any(part in SKIP_DIRS for part in path.parts):
+            continue
+        try:
+            raw = path.read_bytes()[: 1 << 20]
+        except OSError:
+            continue
+        if b"\0" in raw[:1024]:
+            continue
+        yield path, raw.decode("utf-8", errors="replace")
+
+
+def parse_compose(text: str) -> dict[str, dict]:
+    """Map of service name -> {image, expose} from a template-shaped compose file."""
+    services: dict[str, dict] = {}
+    current = None
+    in_services = in_expose = False
+    for line in _lines(text):
+        if re.match(r"^services:\s*$", _strip_inline_comment(line).rstrip()):
+            in_services = True
+            continue
+        if in_services and line and not line[0].isspace():
+            in_services = False
+        if not in_services:
+            continue
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", _strip_inline_comment(line).rstrip())
+        if m:
+            current = m.group(1)
+            services[current] = {"image": None, "expose": []}
+            in_expose = False
+            continue
+        if current is None:
+            continue
+        bare = _strip_inline_comment(line)
+        mi = re.match(r"^\s+image:\s*(\S+)", bare)
+        if mi:
+            services[current]["image"] = mi.group(1)
+        if re.match(r"^\s+expose:", bare):
+            in_expose = True
+            continue
+        if in_expose:
+            me = re.match(r"^\s+-\s*[\"']?(\d+)", bare)
+            if me:
+                services[current]["expose"].append(me.group(1))
+                continue
+            if bare.strip():
+                in_expose = False
+    return services
+
+
+def parse_manifest(text: str) -> dict:
+    """apiVersion, metadata.name, and ingress (service, port) pairs; flow or block style."""
+    out: dict = {"api_version": None, "name": None, "ingress": []}
+    lines = _lines(text)
+    m = re.search(r"^apiVersion:\s*(\S+)", "\n".join(lines), re.M)
+    out["api_version"] = m.group(1) if m else None
+    in_meta = False
+    for line in lines:
+        if re.match(r"^metadata:\s*$", line.rstrip()):
+            in_meta = True
+            continue
+        if in_meta:
+            mn = re.match(r"^\s+name:\s*(\S+)", _strip_inline_comment(line))
+            if mn:
+                out["name"] = mn.group(1)
+                break
+            if line and not line[0].isspace():
+                break
+    ingress_indent = None
+    items: list[str] = []
+    for line in lines:
+        bare = _strip_inline_comment(line).rstrip()
+        if re.match(r"^\s*ingress:\s*$", bare):
+            ingress_indent = len(line) - len(line.lstrip())
+            continue
+        if ingress_indent is None:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if bare.strip() and indent <= ingress_indent:
+            ingress_indent = None
+            continue
+        if re.match(r"^\s*-", bare):
+            items.append(bare)
+        elif items and bare.strip():
+            items[-1] += " " + bare.strip()
+    for item in items:
+        ms = re.search(r"service:\s*([A-Za-z0-9_-]+)", item)
+        mp = re.search(r"port:\s*[\"']?(\d+)", item)
+        if ms or mp:
+            out["ingress"].append(
+                {"service": ms.group(1) if ms else None, "port": mp.group(1) if mp else None}
+            )
+    return out
+
+
+def validate(root: Path, repo: str) -> dict:
+    """Run all hard rules against ``root``. Returns the standard result dict."""
+    findings: list[dict] = []
+
+    def err(code: str, message: str) -> None:
+        findings.append({"level": "error", "code": code, "message": message})
+
+    def warn(code: str, message: str) -> None:
+        findings.append({"level": "warning", "code": code, "message": message})
+
+    def ok(code: str, message: str) -> None:
+        findings.append({"level": "ok", "code": code, "message": message})
+
+    if not root.is_dir():
+        err("root", f"{root} is not a directory")
+        return {"ok": False, "repo": repo, "root": str(root), "findings": findings}
+
+    hits = [
+        f"{path.relative_to(root)}"
+        for path, text in iter_text_files(root)
+        if PLACEHOLDER_RE.search(text)
+    ]
+    if hits:
+        err("placeholder", f"unreplaced template placeholder in: {', '.join(hits[:10])}")
+    else:
+        ok("placeholder", "no template placeholders left")
+
+    compose_path = root / "docker-compose.yml"
+    services: dict[str, dict] = {}
+    if not compose_path.is_file():
+        err("compose", "docker-compose.yml not found")
+    else:
+        text = compose_path.read_text()
+        for line in _lines(text):
+            bare = _strip_inline_comment(line)
+            if re.search(r"(^|\s)ports:", bare):
+                err("compose-forbidden", "compose uses `ports:` — use `expose:` (Traefik routes internally)")
+            if re.search(r"(^|\s)container_name:", bare):
+                err(
+                    "compose-forbidden",
+                    "compose sets `container_name:` — remove it (nuk names containers)",
+                )
+            if "traefik." in bare:
+                err(
+                    "compose-forbidden",
+                    "compose has `traefik.*` labels — remove them (nuk generates routing)",
+                )
+        services = parse_compose(text)
+        expected = f"ghcr.io/astrojones/{repo}:latest"
+        images = {name: svc["image"] for name, svc in services.items() if svc["image"]}
+        if not images:
+            err("image", "no `image:` found under services")
+        for name, image in images.items():
+            if image != expected:
+                err(
+                    "image",
+                    f"service `{name}` pulls `{image}` — CI pushes `{expected}` (two segments, repo name)",
+                )
+        if images and all(img == expected for img in images.values()):
+            ok("image", f"image is {expected}")
+
+    manifest_path = root / ".nuklaut" / "deployment.yml"
+    manifest: dict = {"ingress": []}
+    if not manifest_path.is_file():
+        err("manifest", ".nuklaut/deployment.yml not found")
+    else:
+        manifest = parse_manifest(manifest_path.read_text())
+        if manifest["api_version"] != "nuk/v1":
+            err("manifest", f"apiVersion is {manifest['api_version']!r}; must be nuk/v1")
+        if manifest["name"] != repo:
+            err(
+                "manifest-name",
+                f"metadata.name is {manifest['name']!r}; must equal the repo name {repo!r}",
+            )
+        else:
+            ok("manifest-name", f"metadata.name == {repo}")
+        if not manifest["ingress"]:
+            warn("ingress", "no ingress entries found — app will not be routable")
+        for entry in manifest["ingress"]:
+            svc, port = entry["service"], entry["port"]
+            if services and svc and svc not in services:
+                err(
+                    "ingress-service",
+                    f"ingress references service `{svc}` not defined in docker-compose.yml",
+                )
+            elif svc in services and port and port not in services[svc]["expose"]:
+                warn(
+                    "expose-port",
+                    f"ingress port {port} is not in service `{svc}` `expose:` list",
+                )
+
+    workflow_path = root / ".github" / "workflows" / "deploy.yml"
+    if not workflow_path.is_file():
+        err("workflow", ".github/workflows/deploy.yml not found")
+    elif not any("uses:" in ln and WORKFLOW_REF in ln for ln in _lines(workflow_path.read_text())):
+        err("workflow", f"deploy.yml does not call the reusable workflow {WORKFLOW_REF}")
+    else:
+        ok("workflow", "deploy.yml calls the org reusable workflow")
+
+    dockerfile = root / "Dockerfile"
+    if not dockerfile.is_file():
+        err("dockerfile", "Dockerfile not found")
+    else:
+        exposed = re.findall(r"^EXPOSE\s+(\d+)", dockerfile.read_text(), re.M)
+        for entry in manifest["ingress"]:
+            if entry["port"] and exposed and entry["port"] not in exposed:
+                warn(
+                    "dockerfile-expose",
+                    f"Dockerfile EXPOSE {exposed} does not include ingress port {entry['port']}",
+                )
+
+    is_ok = not any(f["level"] == "error" for f in findings)
+    return {"ok": is_ok, "repo": repo, "root": str(root), "findings": findings}
