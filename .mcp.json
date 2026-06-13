@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "repo-agent-harness": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/run-mcp.sh"
+    }
+  }
+}
