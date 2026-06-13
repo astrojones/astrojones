@@ -10,14 +10,18 @@ truth; this plugin derives the opencode surfaces from them on load.
 
 ## Install
 
-### From npm (recommended once published)
+### From npm (not yet published)
+
+> The package is **not yet published** to npm. The name below matches
+> `package.json` (`astrojones-dev-opencode`); use the local-clone method until a
+> release is cut.
 
 Add to `~/.config/opencode/opencode.json` (global) or `./opencode.json` (project):
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@astrojones/opencode-plugin"]
+  "plugin": ["astrojones-dev-opencode"]
 }
 ```
 
