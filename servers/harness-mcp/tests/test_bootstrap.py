@@ -168,6 +168,87 @@ def test_repo_bootstrap_status_tool_reports_present_files(repo, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# repo_bootstrap MCP action tool + connect-time auto-bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_repo_bootstrap_tool_materializes_harness(repo, monkeypatch):
+    """The repo_bootstrap tool writes agent/ and (AGENTS.md opt-out default) AGENTS.md."""
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(repo)
+    res = server.repo_bootstrap()
+    assert res["ok"]
+    assert (repo / "agent").is_dir()
+    assert (repo / "AGENTS.md").is_file(), "AGENTS.md is opt-out — default writes it"
+    assert not (repo / ".mcp.json").is_file(), ".mcp.json only with pin"
+
+
+def test_repo_bootstrap_tool_pin_writes_mcp_json(repo, monkeypatch):
+    """repo_bootstrap(pin=...) writes the project-pinned .mcp.json for non-CC clients."""
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(repo)
+    res = server.repo_bootstrap(pin="abc1234")
+    assert res["ok"]
+    assert (repo / ".mcp.json").is_file()
+
+
+def test_repo_bootstrap_tool_is_idempotent(repo, monkeypatch):
+    """A second repo_bootstrap call is a no-op (nothing newly created)."""
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(repo)
+    server.repo_bootstrap()
+    res = server.repo_bootstrap()
+    assert res["ok"]
+    assert "agent/" not in res["created"], "agent/ already present — must not re-create"
+
+
+def test_repo_bootstrap_tool_accepts_explicit_path(repo, monkeypatch):
+    """repo_bootstrap(path=...) targets that repo even when the server cwd is elsewhere.
+
+    /new-app needs this: the server cwd is fixed at session start, but the freshly-created
+    app dir is elsewhere — so the path must override the server's own repo root.
+    """
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(repo.parent)  # server cwd: not the target repo
+    res = server.repo_bootstrap(path=str(repo))
+    assert res["ok"]
+    assert (repo / "agent").is_dir()
+
+
+def test_repo_bootstrap_tool_no_repo_errors(tmp_path, monkeypatch):
+    """Outside a git repo the tool returns the structured no-repo error, never writes."""
+    from repo_agent_harness import server
+
+    monkeypatch.chdir(tmp_path)  # tmp_path is not a git repo
+    res = server.repo_bootstrap()
+    assert "error" in res, "no-repo returns the structured error dict (no 'ok' key)"
+    assert not (tmp_path / "agent").exists(), "must not write outside a git repo"
+
+
+def test_auto_bootstrap_writes_agent_tree_and_agents_md(repo):
+    """Connect-time auto-bootstrap harnesses the repo, AGENTS.md included (opt-out default)."""
+    from repo_agent_harness import server
+
+    server._auto_bootstrap(repo)
+    assert (repo / "agent").is_dir()
+    assert (repo / "AGENTS.md").is_file()
+
+
+def test_auto_bootstrap_respects_agents_md_opt_out_sentinel(repo):
+    """With the .harness-no-agents-md sentinel, auto-bootstrap writes agent/ but not AGENTS.md."""
+    from repo_agent_harness import server
+
+    (repo / server._AGENTS_MD_OPT_OUT).write_text("")
+    server._auto_bootstrap(repo)
+    assert (repo / "agent").is_dir(), "the harness tooling still installs"
+    assert not (repo / "AGENTS.md").is_file(), "AGENTS.md suppressed by the opt-out sentinel"
+
+
+# ---------------------------------------------------------------------------
 # opencode skills.paths convergence — the plugin rewrites the sentinel, so a
 # re-bootstrap must NOT re-emit it or duplicate the resolved path (issue #5 S1)
 # ---------------------------------------------------------------------------

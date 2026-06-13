@@ -321,7 +321,7 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
 def bootstrap_repo(  # noqa: PLR0913 — six kwargs are intentional; this is the public bootstrap surface
     root: str,
     *,
-    target: BootstrapTarget = "claude",
+    target: str = "claude",
     agents_md: str = "skip",
     force: bool = False,
     pin: str | None = None,

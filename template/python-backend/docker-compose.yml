@@ -1,8 +1,0 @@
-services:
-  web:
-    image: ghcr.io/astrojones/__REPO_NAME__:latest   # two-segment; matches CI push
-    restart: unless-stopped
-    expose:
-      - "8080"        # NOT ports: — Traefik reaches uvicorn over the internal network
-    # nuk injects per-app secrets and DB creds via the generated override;
-    # no env_file, no traefik.* labels, and no container_name: here.

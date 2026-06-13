@@ -1,11 +1,11 @@
 {
-  "name": "astrojones-dev",
-  "version": "0.13.0",
-  "description": "The astrojones org plugin: nuklaut deploy knowledge, /new-app scaffolding (born harnessed), deploy-doctor CI diagnosis, plus the repo-agent-harness Claude Code surface — coding-workflow skills, subagents, safety-hook shims, and /harness-init. Bundles the repo-agent-harness MCP server — auto-connects at session start. Use /harness-init to scaffold agent/ config into each repo; pass --pin for a project .mcp.json (CI / non-CC clients only).",
+  "name": "raisl",
+  "version": "0.14.0",
+  "description": "The repo agent harness as a Claude Code plugin: a bundled, auto-connecting MCP server (deterministic repo_* tools + proxied serena_* code navigation), safety hooks, and generic coding-workflow skills and subagents (bugfix/feature/refactor/test/implement; explorer/implementer/reviewer/test-runner/fullstack-architect). Harnesses any repo automatically on connect (AGENTS.md is opt-out); /harness-init is the explicit fallback for non-MCP clients.",
   "author": {
     "name": "astrojones",
     "url": "https://github.com/astrojones"
   },
-  "homepage": "https://github.com/astrojones/astrojones-dev",
-  "keywords": ["nuklaut", "deployment", "onboarding", "astrojones"]
+  "homepage": "https://github.com/astrojones/raisl",
+  "keywords": ["harness", "mcp", "serena", "coding-agent", "safety", "code-navigation"]
 }

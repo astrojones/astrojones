@@ -1,5 +1,5 @@
 {
-  "description": "astrojones-dev: safe-shell + secret-read guard piped through the repo's pinned harness (PreToolUse) and a verification nudge (PostToolUse)",
+  "description": "raisl: safe-shell + secret-read guard piped through the repo's pinned harness (PreToolUse) and a verification nudge (PostToolUse)",
   "hooks": {
     "PreToolUse": [
       {

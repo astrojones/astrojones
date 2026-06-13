@@ -99,8 +99,8 @@ Every surface starts at the contract, not the component:
   schema is the source of truth for the client's types.
 - **Frontend:** Svelte / SvelteKit (default) or React; **Tailwind + shadcn** for the system;
   end-to-end types generated from the backend schema, never hand-duplicated.
-- **Auth / deploy:** cookie-based or Telegram-login sessions; nuklaut + Docker + GHCR targets,
-  `astrojones.de` ingress. Design with the deploy boundary in mind (env, secrets, image size).
+- **Auth / deploy:** cookie-based or token/session auth; containerized deploy targets behind
+  a reverse proxy. Design with the deploy boundary in mind (env, secrets, image size).
 
 ## Document generation (tectonic / synctex)
 
