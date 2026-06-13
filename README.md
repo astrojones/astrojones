@@ -5,6 +5,40 @@ the deployment knowledge, a one-command scaffolder, and a CI-failure diagnostici
 a new contributor can go from nothing to a live `https://<app>.astrojones.de` without
 learning the controller internals or touching SSH.
 
+## Harness MCP server — what changed
+
+The per-repo workflow skills (`bugfix`, `feature`, `refactor`, `test`, `implement`,
+`commit-semantic`) and the `/harness-init` workflow now live in the harness MCP server
+as **prompts** (the single source of truth). They're exposed two ways:
+
+- `@mcp.prompt()` registration on the server, so any MCP-aware client that surfaces
+  prompts (Claude Code) discovers them via `prompts/list` and reads them via
+  `prompts/get`.
+- A `repo_prompt_get(name)` MCP tool wrapper, for clients that only surface tools
+  to the model (notably opencode).
+
+The plugin repo's `skills/<name>/SKILL.md` files remain as offline copies for
+Claude users who run without an MCP connection; a drift check (`repo_drift_check`
+MCP tool / `repo-agent-harness drift-check` CLI) reports divergence as a
+**warning, never an error**, and `repo_drift_sync` / `repo-agent-harness
+sync-prompts` refreshes them.
+
+The `/harness-init` command now delegates to the new `bootstrap --target both` CLI
+subcommand (the actual first-touch materialization — `agent/`, `AGENTS.md`,
+`.mcp.json` with `--pin`, and `.opencode/opencode.json` for opencode users).
+The plugin's load-time hook is expected to invoke this automatically; the command
+is the explicit re-bootstrap path.
+
+The deploy validators (`agent/tools/deploy-validate`, `deploy-status`, `deploy-logs`)
+are now also exposed as MCP tools (`repo_deploy_validate`, `repo_deploy_status`,
+`repo_deploy_logs`) and CLI subcommands, so the model can invoke them directly
+without spawning a subprocess from a tool wrapper. The shim files in
+`template/_shared/agent/tools/` stay for the non-plugin / CI case.
+
+The org-only knowledge (`nuklaut-deploy` skill, `deploy-doctor` agent, `/new-app`
+and `/harness-app` commands) is out of scope for this change — it stays Claude-only
+in this repo. A separate org plugin is the planned home for it.
+
 ## Install
 
 ```bash
