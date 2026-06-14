@@ -1,5 +1,5 @@
 {
-  "_comment": "Installed by `repo-agent-harness init`. The harness server is fetched by spec below (pin a commit with `init --pin <sha>`); Serena is launched and proxied by the harness itself (serena_* tools). For local development replace the entry with: uv run --project /abs/path/to/repo-agent-harness/mcp repo-agent-harness-mcp",
+  "_comment": "Installed by `repo-agent-harness init`. The harness server is fetched by spec below (pin a commit with `init --pin <sha>`); Serena is launched and proxied by the harness itself (serena_* tools). For local development replace the entry with: uv run --project /abs/path/to/raisl/servers/harness-mcp repo-agent-harness-mcp",
   "mcpServers": {
     "repo-agent-harness": {
       "command": "uvx",

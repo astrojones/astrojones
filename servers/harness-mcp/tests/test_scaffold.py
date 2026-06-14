@@ -65,8 +65,8 @@ def test_init_writes_mcp_json_with_single_server(repo):
     assert set(cfg["mcpServers"]) == {"repo-agent-harness"}, "serena is proxied through the harness now"
     args = cfg["mcpServers"]["repo-agent-harness"]["args"]
     spec = args[args.index("--from") + 1]
-    assert spec.startswith("git+https://")
-    assert spec.endswith("#subdirectory=mcp")
+    assert spec.startswith("git+https://github.com/astrojones/raisl")
+    assert spec.endswith("#subdirectory=servers/harness-mcp")
     assert "__HARNESS_SPEC__" not in json.dumps(cfg)
 
 
@@ -74,7 +74,7 @@ def test_init_pin_is_written_into_spec(repo):
     scaffold.init_repo(str(repo), pin="abc1234")
     args = _mcp_config(repo)["mcpServers"]["repo-agent-harness"]["args"]
     spec = args[args.index("--from") + 1]
-    assert "@abc1234#subdirectory=mcp" in spec
+    assert "@abc1234#subdirectory=servers/harness-mcp" in spec
 
 
 def test_init_spec_override_wins(repo):

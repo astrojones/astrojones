@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 SECTION_BEGIN = "<!-- repo-agent-harness:section:begin -->"
 SECTION_END = "<!-- repo-agent-harness:section:end -->"
 
-_REPO_URL = "https://github.com/astrojones/repo-agent-harness"
+_REPO_URL = "https://github.com/astrojones/raisl"
 _PLACEHOLDER_NAME = "__REPO_NAME__"
 _PLACEHOLDER_SPEC = "__HARNESS_SPEC__"
 
@@ -44,7 +44,7 @@ _OPENCODE_TARGETS: frozenset[str] = frozenset({"opencode", "both"})
 def harness_spec(pin: str | None = None) -> str:
     """The uvx/pip requirement spec for the bundled MCP server, optionally sha-pinned."""
     rev = f"@{pin}" if pin else ""
-    return f"git+{_REPO_URL}{rev}#subdirectory=mcp"
+    return f"git+{_REPO_URL}{rev}#subdirectory=servers/harness-mcp"
 
 
 def _templates():

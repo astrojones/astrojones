@@ -37,7 +37,9 @@ def test_bootstrap_with_pin_writes_mcp_json(repo):
     assert (repo / ".mcp.json").is_file()
     cfg = json.loads((repo / ".mcp.json").read_text())
     assert "repo-agent-harness" in cfg["mcpServers"]
-    assert any("@abc1234#subdirectory=mcp" in str(a) for a in cfg["mcpServers"]["repo-agent-harness"]["args"])
+    assert any(
+        "@abc1234#subdirectory=servers/harness-mcp" in str(a) for a in cfg["mcpServers"]["repo-agent-harness"]["args"]
+    )
 
 
 def test_bootstrap_opencode_target_creates_opencode_dir(repo):
