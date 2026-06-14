@@ -1,11 +1,18 @@
 {
   "name": "raisl",
-  "version": "0.14.0",
+  "version": "1.0.0",
   "description": "The repo agent harness as a Claude Code plugin: a bundled, auto-connecting MCP server (deterministic repo_* tools + proxied serena_* code navigation), safety hooks, and generic coding-workflow skills and subagents (bugfix/feature/refactor/test/implement; explorer/implementer/reviewer/test-runner/fullstack-architect). Harnesses any repo automatically on connect (AGENTS.md is opt-out); /harness-init is the explicit fallback for non-MCP clients.",
   "author": {
     "name": "astrojones",
     "url": "https://github.com/astrojones"
   },
   "homepage": "https://github.com/astrojones/raisl",
-  "keywords": ["harness", "mcp", "serena", "coding-agent", "safety", "code-navigation"]
+  "keywords": [
+    "harness",
+    "mcp",
+    "serena",
+    "coding-agent",
+    "safety",
+    "code-navigation"
+  ]
 }
