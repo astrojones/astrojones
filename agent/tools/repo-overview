@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Compact overview of detected languages, package managers, important paths, tools.
-exec "$(dirname "$0")/_run" overview "$@"

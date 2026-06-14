@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Current uncommitted diff (stat + unified), secret-redacted and truncated.
-exec "$(dirname "$0")/_run" diff "$@"

@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Typecheck only the changed files (mypy / pyright / tsc), auto-detected.
-exec "$(dirname "$0")/_run" typecheck-changed "$@"
