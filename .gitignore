@@ -10,7 +10,6 @@ uv.lock
 # local Claude Code session state
 .claude/*
 !.claude/settings.json
-!.claude/hooks/
 .python-version
 
 # self-bootstrap artifacts (harness regenerates these on connect; AGENTS.md is tracked)
