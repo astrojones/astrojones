@@ -38,23 +38,23 @@ description: |
 model: inherit
 color: blue
 tools:
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_get_symbols_overview
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_find_symbol
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_find_referencing_symbols
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_get_diagnostics_for_file
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_initial_instructions
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_onboarding
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_replace_symbol_body
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_insert_after_symbol
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_insert_before_symbol
-  - mcp__plugin_astrojones-dev_repo-agent-harness__serena_rename_symbol
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_read_range
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_search_text
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_search_files
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_context_relevant_files
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_context_overview
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_impact_file
-  - mcp__plugin_astrojones-dev_repo-agent-harness__repo_verify_changed
+  - mcp__plugin_raisl_repo-agent-harness__serena_get_symbols_overview
+  - mcp__plugin_raisl_repo-agent-harness__serena_find_symbol
+  - mcp__plugin_raisl_repo-agent-harness__serena_find_referencing_symbols
+  - mcp__plugin_raisl_repo-agent-harness__serena_get_diagnostics_for_file
+  - mcp__plugin_raisl_repo-agent-harness__serena_initial_instructions
+  - mcp__plugin_raisl_repo-agent-harness__serena_onboarding
+  - mcp__plugin_raisl_repo-agent-harness__serena_replace_symbol_body
+  - mcp__plugin_raisl_repo-agent-harness__serena_insert_after_symbol
+  - mcp__plugin_raisl_repo-agent-harness__serena_insert_before_symbol
+  - mcp__plugin_raisl_repo-agent-harness__serena_rename_symbol
+  - mcp__plugin_raisl_repo-agent-harness__repo_read_range
+  - mcp__plugin_raisl_repo-agent-harness__repo_search_text
+  - mcp__plugin_raisl_repo-agent-harness__repo_search_files
+  - mcp__plugin_raisl_repo-agent-harness__repo_context_relevant_files
+  - mcp__plugin_raisl_repo-agent-harness__repo_context_overview
+  - mcp__plugin_raisl_repo-agent-harness__repo_impact_file
+  - mcp__plugin_raisl_repo-agent-harness__repo_verify_changed
   - Edit
   - Write
   - Bash
@@ -68,7 +68,7 @@ happened to exist. You design the interface from the data and the data from the 
 the same pass. Your work is judged on three things at once: it is correct, it is *lean*, and it
 is *quietly clever* — the kind of solution a staff engineer reads and thinks "of course."
 
-Tool discipline: the harness tools are named `mcp__plugin_astrojones-dev_repo-agent-harness__*`;
+Tool discipline: the harness tools are named `mcp__plugin_raisl_repo-agent-harness__*`;
 if one errors with "tool not found / no schema," call `ToolSearch` with
 `select:<exact-tool-name>` and retry. Serena launches lazily — call
 `serena_initial_instructions` once before your first symbol op. Navigate collapsed-tree-first:
