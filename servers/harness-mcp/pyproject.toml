@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "repo-agent-harness"
+name = "harness"
 version = "0.6.2"
 description = "Deterministic, safe, repo-aware tools for coding agents (MCP server + CLI)."
 readme = "README.md"
@@ -25,8 +25,8 @@ dependencies = [
 ]
 
 [project.scripts]
-repo-agent-harness-mcp = "repo_agent_harness.server:main"
-repo-agent-harness = "repo_agent_harness.cli:main"
+harness-mcp = "repo_agent_harness.server:main"
+harness = "repo_agent_harness.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3", "pytest-cov>=5.0", "ruff>=0.9", "ty>=0.0.29"]
