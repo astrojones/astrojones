@@ -14,6 +14,13 @@ by commit SHA the snapshot is deterministic; a no-network test guards pin drift.
 The stdio transport uses ``keep_alive``, so the Serena process (and its language
 servers) survives across calls, and a crashed child is respawned transparently on
 the next call.
+
+The repo root is resolved **lazily**, on the first serena tool call — never at
+construction. Callers pass either a fixed root string or a zero-arg callable that
+returns the root at call time. This matters because the server process may be
+started from a directory that is not the project (e.g. ``$HOME`` in a cloud
+session): resolving at first use lets the child Serena attach to the real project
+once the working directory / ``CLAUDE_PROJECT_DIR`` is settled.
 """
 
 from __future__ import annotations
@@ -32,6 +39,8 @@ from fastmcp.tools import Tool, ToolResult
 from pydantic import PrivateAttr
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mcp import types
 
 SERENA_PIN = "2449313c0d7427275c4c66aedff7d4881782f713"
@@ -64,19 +73,48 @@ def serena_args(root: str) -> list[str]:
 
 
 class SerenaGateway:
-    """Lazy, crash-tolerant MCP client owning the child Serena process for one repo."""
+    """Lazy, crash-tolerant MCP client owning the child Serena process for one repo.
 
-    def __init__(self, root: str, transport: StdioTransport | None = None) -> None:
-        """Prepare the client without connecting; ``transport`` is injectable for tests."""
-        self.root = root
-        self._client = Client(
-            transport or StdioTransport(command="uvx", args=serena_args(root), cwd=root, keep_alive=True)
-        )
+    Both the root resolution and the child connection are deferred to the first
+    tool call: ``root`` may be a fixed string or a zero-arg callable resolved then.
+    An injected ``transport`` (tests / dev) bypasses root resolution entirely.
+    """
+
+    def __init__(
+        self,
+        root: str | Callable[[], str | None],
+        transport: StdioTransport | None = None,
+    ) -> None:
+        """Prepare the gateway without resolving the root or connecting.
+
+        ``transport`` is injectable for tests; when given it is used as-is and the
+        root is never resolved. Otherwise the client (and its child Serena) is built
+        on the first call from the root resolved at that moment.
+        """
+        self._root_spec = root
+        self._injected_transport = transport
+        self._client: Client | None = None
+        self.root: str | None = root if isinstance(root, str) else None
+
+    def _ensure_client(self) -> Client:
+        """Build the client once, resolving the repo root lazily on first use."""
+        if self._client is None:
+            if self._injected_transport is not None:
+                transport = self._injected_transport
+            else:
+                resolved = self._root_spec() if callable(self._root_spec) else self._root_spec
+                self.root = resolved or str(Path.cwd())
+                transport = StdioTransport(
+                    command="uvx", args=serena_args(self.root), cwd=self.root, keep_alive=True
+                )
+            self._client = Client(transport)
+        return self._client
 
     async def call(self, name: str, arguments: dict) -> types.CallToolResult:
         """Forward one tool call to Serena (launches the child on first use)."""
-        async with self._client:
-            return await self._client.call_tool_mcp(name, arguments)
+        client = self._ensure_client()
+        async with client:
+            return await client.call_tool_mcp(name, arguments)
 
     def call_from_thread(self, name: str, arguments: dict) -> types.CallToolResult:
         """Sync facade for callers running in a worker thread (e.g. health checks)."""
@@ -84,12 +122,14 @@ class SerenaGateway:
 
     async def list_live_tools(self) -> list[types.Tool]:
         """List tools from the live child (used by the snapshot generator)."""
-        async with self._client:
-            return await self._client.list_tools()
+        client = self._ensure_client()
+        async with client:
+            return await client.list_tools()
 
     async def aclose(self) -> None:
-        """Terminate the child process (keep_alive transports outlive sessions otherwise)."""
-        await self._client.close()
+        """Terminate the child process, if one was ever started."""
+        if self._client is not None:
+            await self._client.close()
 
 
 class _ProxiedSerenaTool(Tool):
