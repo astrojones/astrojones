@@ -1,6 +1,6 @@
 import pathlib
 
-from repo_agent_harness import git
+from harness import git
 
 
 def test_repo_root(repo):

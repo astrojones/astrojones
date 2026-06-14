@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from repo_agent_harness import git, policies, secrets
+from harness import git, policies, secrets
 
 _GUARDED_FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit"}
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}

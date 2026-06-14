@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from repo_agent_harness import server
+from harness import server
 
 # ---------------------------------------------------------------------------
 # Fixture: a minimal deployable astrojones app repo
@@ -275,8 +275,8 @@ def _gh_not_found(*args, **kwargs):
 
 def test_deploy_status_cli_mcp_parity_on_gh_missing(deployable_repo, monkeypatch):
     """CLI _deploy_status and MCP repo_deploy_status share an error shape."""
-    from repo_agent_harness import cli
-    from repo_agent_harness import deploy as deploy_mod
+    from harness import cli
+    from harness import deploy as deploy_mod
 
     monkeypatch.chdir(deployable_repo)
     monkeypatch.setattr(deploy_mod.subprocess, "run", _gh_not_found)
@@ -291,8 +291,8 @@ def test_deploy_status_cli_mcp_parity_on_gh_missing(deployable_repo, monkeypatch
 
 def test_deploy_logs_cli_mcp_parity_on_gh_missing(deployable_repo, monkeypatch):
     """CLI _deploy_logs and MCP repo_deploy_logs share an error shape."""
-    from repo_agent_harness import cli
-    from repo_agent_harness import deploy as deploy_mod
+    from harness import cli
+    from harness import deploy as deploy_mod
 
     monkeypatch.chdir(deployable_repo)
     monkeypatch.setattr(deploy_mod.subprocess, "run", _gh_not_found)

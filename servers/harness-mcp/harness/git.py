@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from repo_agent_harness import secrets as _secrets
-from repo_agent_harness import shell
+from harness import secrets as _secrets
+from harness import shell
 
 
 def repo_root(cwd: str | None = None) -> str | None:

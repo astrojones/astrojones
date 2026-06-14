@@ -1,4 +1,4 @@
-from repo_agent_harness import verify
+from harness import verify
 
 
 def test_verify_clean_repo_all_skipped(repo):

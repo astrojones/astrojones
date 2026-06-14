@@ -4,7 +4,7 @@ import subprocess
 
 import anyio
 import pytest
-from repo_agent_harness import watcher
+from harness import watcher
 
 pytestmark = pytest.mark.anyio
 
@@ -83,7 +83,7 @@ async def test_stop_terminates_run(repo):
 
 
 async def test_server_lifespan_wires_watcher_to_health(repo, monkeypatch):
-    from repo_agent_harness import git, health, server
+    from harness import git, health, server
 
     monkeypatch.chdir(repo)
     (repo / "agent").mkdir(exist_ok=True)

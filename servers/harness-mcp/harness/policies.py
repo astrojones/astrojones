@@ -12,7 +12,7 @@ try:
 except ImportError:  # keep the package importable in minimal (hook) environments
     yaml = None
 
-from repo_agent_harness import secrets as _secrets
+from harness import secrets as _secrets
 
 # Conservative built-in denials — always on, even without a shell.yml.
 _DENY_REGEXES = [
@@ -75,7 +75,7 @@ def _find_config(root: str, name: str) -> Path | None:
     Resolution order: per-repo state dir → global harness home → package defaults.
     Returns None only if the package default is also absent (should not happen).
     """
-    from repo_agent_harness.paths import harness_home, repo_id  # noqa: PLC0415
+    from harness.paths import harness_home, repo_id  # noqa: PLC0415
 
     h = harness_home()
     rid = repo_id(root)

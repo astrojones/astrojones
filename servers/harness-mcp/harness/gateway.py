@@ -109,7 +109,7 @@ class _ProxiedSerenaTool(Tool):
 
 def load_snapshot() -> dict:
     """Load the packaged Serena tool snapshot, or an empty one when not generated yet."""
-    resource = files("repo_agent_harness") / _SNAPSHOT_NAME
+    resource = files("harness") / _SNAPSHOT_NAME
     if not resource.is_file():
         return {"pin": SERENA_PIN, "tools": []}
     return json.loads(resource.read_text(encoding="utf-8"))

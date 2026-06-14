@@ -1,6 +1,6 @@
 import json
 
-from repo_agent_harness import cli
+from harness import cli
 
 
 def test_cli_overview(repo, monkeypatch, capsys):

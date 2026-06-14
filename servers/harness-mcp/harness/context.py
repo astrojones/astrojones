@@ -8,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from repo_agent_harness import git, policies, shell
-from repo_agent_harness import secrets as _secrets
+from harness import git, policies, shell
+from harness import secrets as _secrets
 
 LANG_BY_EXT = {
     ".py": "Python",
@@ -123,7 +123,7 @@ def _harness_summary(rootp: Path) -> dict:
     knows to read it. ``agents``/``skills`` are present only in plugin checkouts; scaffolded
     target repos carry ``agent/`` (policies + tools) but no plugin dirs, and list empty.
     """
-    from repo_agent_harness import scaffold
+    from harness import scaffold
 
     agents_md = rootp / "AGENTS.md"
     guide = None

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from repo_agent_harness import scaffold
+from harness import scaffold
 
 # ---------------------------------------------------------------------------
 # Default behavior (target="claude") — same shape as init, no surprise
@@ -111,7 +111,7 @@ def test_bootstrap_unknown_target_returns_error(repo):
 
 def test_cli_bootstrap_subcommand(repo, monkeypatch, capsys):
     """`bootstrap --target both --pin <sha> --agents-md overwrite` writes everything."""
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     code = cli.main(
@@ -141,7 +141,7 @@ def test_cli_bootstrap_subcommand(repo, monkeypatch, capsys):
 
 def test_repo_bootstrap_status_tool_inspects_existing_state(repo, monkeypatch):
     """repo_bootstrap_status reports what would be written without writing."""
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     # Empty repo: nothing present, the tool reports the gaps.
@@ -156,7 +156,7 @@ def test_repo_bootstrap_status_tool_inspects_existing_state(repo, monkeypatch):
 
 def test_repo_bootstrap_status_tool_reports_present_files(repo, monkeypatch):
     """After a full bootstrap, the status tool reports what's now present."""
-    from repo_agent_harness import scaffold, server
+    from harness import scaffold, server
 
     monkeypatch.chdir(repo)
     scaffold.bootstrap_repo(str(repo), target="both", agents_md="overwrite", pin="abc1234")
@@ -174,7 +174,7 @@ def test_repo_bootstrap_status_tool_reports_present_files(repo, monkeypatch):
 
 def test_repo_bootstrap_tool_materializes_harness(repo, monkeypatch):
     """The repo_bootstrap tool writes agent/ and (AGENTS.md opt-out default) AGENTS.md."""
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     res = server.repo_bootstrap()
@@ -186,7 +186,7 @@ def test_repo_bootstrap_tool_materializes_harness(repo, monkeypatch):
 
 def test_repo_bootstrap_tool_pin_writes_mcp_json(repo, monkeypatch):
     """repo_bootstrap(pin=...) writes the project-pinned .mcp.json for non-CC clients."""
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     res = server.repo_bootstrap(pin="abc1234")
@@ -196,7 +196,7 @@ def test_repo_bootstrap_tool_pin_writes_mcp_json(repo, monkeypatch):
 
 def test_repo_bootstrap_tool_is_idempotent(repo, monkeypatch):
     """A second repo_bootstrap call is a no-op (nothing newly created)."""
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     server.repo_bootstrap()
@@ -211,7 +211,7 @@ def test_repo_bootstrap_tool_accepts_explicit_path(repo, monkeypatch):
     /new-app needs this: the server cwd is fixed at session start, but the freshly-created
     app dir is elsewhere — so the path must override the server's own repo root.
     """
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo.parent)  # server cwd: not the target repo
     res = server.repo_bootstrap(path=str(repo))
@@ -221,7 +221,7 @@ def test_repo_bootstrap_tool_accepts_explicit_path(repo, monkeypatch):
 
 def test_repo_bootstrap_tool_no_repo_errors(tmp_path, monkeypatch):
     """Outside a git repo the tool returns the structured no-repo error, never writes."""
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(tmp_path)  # tmp_path is not a git repo
     res = server.repo_bootstrap()
@@ -231,7 +231,7 @@ def test_repo_bootstrap_tool_no_repo_errors(tmp_path, monkeypatch):
 
 def test_auto_bootstrap_writes_agent_tree_and_agents_md(repo):
     """Connect-time auto-bootstrap harnesses the repo, AGENTS.md included (opt-out default)."""
-    from repo_agent_harness import server
+    from harness import server
 
     server._auto_bootstrap(repo)
     assert (repo / "agent").is_dir()
@@ -240,7 +240,7 @@ def test_auto_bootstrap_writes_agent_tree_and_agents_md(repo):
 
 def test_auto_bootstrap_respects_agents_md_opt_out_sentinel(repo):
     """With the .harness-no-agents-md sentinel, auto-bootstrap writes agent/ but not AGENTS.md."""
-    from repo_agent_harness import server
+    from harness import server
 
     (repo / server._AGENTS_MD_OPT_OUT).write_text("")
     server._auto_bootstrap(repo)
@@ -255,7 +255,7 @@ def test_auto_bootstrap_fails_open_on_malformed_repo(repo):
     down the whole harness server for the session. Malformed JSON raises JSONDecodeError
     (a ValueError, not OSError), so the connect-time path must swallow broadly and fail open.
     """
-    from repo_agent_harness import server
+    from harness import server
 
     (repo / ".opencode").mkdir()
     (repo / ".opencode" / "opencode.json").write_text("{ this is not valid json")
@@ -266,7 +266,7 @@ def test_auto_bootstrap_fails_open_on_malformed_repo(repo):
 def test_repo_bootstrap_tool_surfaces_errors(repo, monkeypatch):
     """The explicit tool does NOT swallow (only the connect-time path does) — errors surface."""
     import pytest
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     (repo / ".opencode").mkdir()

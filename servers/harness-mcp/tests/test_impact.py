@@ -1,4 +1,4 @@
-from repo_agent_harness import impact
+from harness import impact
 
 
 def test_impact_high_risk(repo):

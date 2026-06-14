@@ -50,7 +50,7 @@ class PromptEntry:
         body: The markdown body. This is the workflow itself — assistant-
             agnostic, no per-client framing.
         source: Repo-relative path to the on-disk file, relative to the
-            ``repo_agent_harness`` package root. Used by the drift-check
+            ``harness`` package root. Used by the drift-check
             tool to compare the served body to the on-disk file.
         checksum: SHA-256 of ``body`` (hex-encoded). Cached at load time so
             ``repo_prompt_get`` doesn't re-hash on every call.
@@ -122,7 +122,7 @@ def _load_prompts() -> dict[str, PromptEntry]:
     must be present — a missing body is a packaging bug that should fail
     loud at startup.
     """
-    prompts_dir = files("repo_agent_harness") / "prompts"
+    prompts_dir = files("harness") / "prompts"
     entries: dict[str, PromptEntry] = {}
     for entry in sorted(prompts_dir.iterdir(), key=lambda e: e.name):
         if entry.name.startswith("_") or not entry.name.endswith(".md"):

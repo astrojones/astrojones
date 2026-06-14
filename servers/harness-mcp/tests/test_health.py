@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from repo_agent_harness import health, shell
-from repo_agent_harness.paths import repo_id
+from harness import health, shell
+from harness.paths import repo_id
 
 CHEAP_CONFIG = """\
 version: 1
@@ -200,7 +200,7 @@ def test_only_unknown_id_reports_known_ids(repo):
 
 
 def test_server_tool_and_resource(repo, monkeypatch, isolated_harness_home):
-    from repo_agent_harness import server
+    from harness import server
 
     monkeypatch.chdir(repo)
     _write_config(repo, CHEAP_CONFIG, isolated_harness_home)
@@ -214,7 +214,7 @@ def test_server_tool_and_resource(repo, monkeypatch, isolated_harness_home):
 
 
 def test_cli_health_subcommand(repo, monkeypatch, capsys, isolated_harness_home):
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     _write_config(repo, CHEAP_CONFIG, isolated_harness_home)

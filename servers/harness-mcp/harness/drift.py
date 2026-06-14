@@ -30,7 +30,7 @@ import difflib
 import re
 from pathlib import Path
 
-from repo_agent_harness import prompts_registry
+from harness import prompts_registry
 
 # SKILL.md files start with `---\n...\n---\n`. Everything after the closing
 # fence is the body; everything before is YAML frontmatter (per-assistant

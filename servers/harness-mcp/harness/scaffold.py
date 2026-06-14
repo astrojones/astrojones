@@ -47,7 +47,7 @@ def harness_spec(pin: str | None = None) -> str:
 
 
 def _templates():
-    return files("repo_agent_harness") / "templates"
+    return files("harness") / "templates"
 
 
 def _walk(trav, prefix: str = "") -> Iterator[tuple[str, object]]:
@@ -219,7 +219,7 @@ def _opencode_resolve_paths(block: dict) -> dict:
     """Replace ``__HARNESS_OPENCODE_SKILLS_PATH__`` with the real path on disk.
 
     The harness server ships its prompts as ``prompts/<name>.md`` inside the
-    ``repo_agent_harness`` package. The opencode plugin's translator mirrors
+    ``harness`` package. The opencode plugin's translator mirrors
     them as ``SKILL.md`` files at ``<plugin>/opencode/skills/<name>/SKILL.md``
     at startup. We can't know that path from the harness server alone (the
     plugin path varies by install), so the marker is a known sentinel: the

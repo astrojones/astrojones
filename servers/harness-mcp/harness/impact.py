@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from repo_agent_harness import git, shell
+from harness import git, shell
 
 HIGH_RISK = [
     "migration",

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from repo_agent_harness import scaffold
+from harness import scaffold
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -142,7 +142,7 @@ def test_init_agents_md_skip_mode(repo):
 
 
 def test_cli_init_subcommand(repo, monkeypatch, capsys):
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo))

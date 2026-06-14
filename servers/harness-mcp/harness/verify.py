@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-from repo_agent_harness import git, shell
+from harness import git, shell
 
 
 def _changed_by_ext(root: str, exts: set[str]) -> list[str]:

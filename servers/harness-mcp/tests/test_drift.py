@@ -24,7 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from repo_agent_harness import drift, prompts_registry
+from harness import drift, prompts_registry
 
 # ---------------------------------------------------------------------------
 # compare_bodies — pure function, no I/O
@@ -156,7 +156,7 @@ def test_check_repo_drift_handles_no_skills_dir(tmp_path):
 
 def test_repo_drift_check_tool_reports_summary(tmp_path, monkeypatch):
     """The repo_drift_check MCP tool returns the same shape as check_repo_drift."""
-    from repo_agent_harness import server
+    from harness import server
 
     # Walk the plugin repo's actual .claude/skills/ (most are in sync since
     # the bodies were copied verbatim from the harness server when this PR
@@ -184,7 +184,7 @@ def test_cli_drift_check_subcommand(repo, monkeypatch, capsys):
     """
     import json
 
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     code = cli.main(["drift-check"])

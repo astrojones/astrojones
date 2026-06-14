@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from repo_agent_harness import server
+from harness import server
 
 # Names that must always be exposed. Adding a new prompt is a deliberate
 # action: add it here too, or this test fails on review.
@@ -106,7 +106,7 @@ def test_prompt_bodies_have_no_assistant_specific_framing():
 
 def test_cli_prompt_get_subcommand(capsys, repo, monkeypatch):
     """`prompt get <name>` prints the body to stdout as JSON."""
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     code = cli.main(["prompt", "get", "bugfix"])
@@ -119,7 +119,7 @@ def test_cli_prompt_get_subcommand(capsys, repo, monkeypatch):
 
 def test_cli_prompt_list_subcommand(capsys, repo, monkeypatch):
     """`prompt list` prints the registered prompt names as JSON."""
-    from repo_agent_harness import cli
+    from harness import cli
 
     monkeypatch.chdir(repo)
     code = cli.main(["prompt", "list"])

@@ -1,5 +1,5 @@
-from repo_agent_harness import policies
-from repo_agent_harness.paths import repo_id
+from harness import policies
+from harness.paths import repo_id
 
 
 def test_denies_rm_rf(repo):

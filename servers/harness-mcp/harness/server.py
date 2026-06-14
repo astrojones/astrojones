@@ -27,7 +27,7 @@ except ImportError as exc:  # pragma: no cover
     msg = "the 'fastmcp' package is required: uv add fastmcp"
     raise SystemExit(msg) from exc
 
-from repo_agent_harness import (
+from harness import (
     context,
     deploy,
     drift,
@@ -259,7 +259,7 @@ def repo_prompt_get(
     assistant-agnostic, no per-client framing.
 
     The ``source`` field is the path to the on-disk file relative to the
-    ``repo_agent_harness`` package root; the ``checksum`` is the SHA-256 of
+    ``harness`` package root; the ``checksum`` is the SHA-256 of
     the body. Drift-check tools compare the served body to the on-disk file
     using these two fields.
     """
@@ -448,7 +448,7 @@ def res_policy(name: str) -> str:
     root = git.repo_root()
     if not root:
         return "# not inside a git repository"
-    from repo_agent_harness.policies import _find_config  # noqa: PLC0415
+    from harness.policies import _find_config  # noqa: PLC0415
 
     p = _find_config(root, name)
     return p.read_text() if p is not None else f"# no {name}.yml configured; harness defaults apply"

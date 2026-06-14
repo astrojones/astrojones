@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from repo_agent_harness import paths
+from harness import paths
 
 
 def test_repo_id_is_stable(tmp_path):

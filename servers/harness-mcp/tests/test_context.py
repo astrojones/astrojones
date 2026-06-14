@@ -1,5 +1,5 @@
 import pytest
-from repo_agent_harness import context
+from harness import context
 
 
 def test_overview(repo):
@@ -22,7 +22,7 @@ def test_overview_harness_absent(repo):
 
 def test_overview_harness_present(repo):
     """When agent/ + the AGENTS.md workflow section + plugin dirs exist, surface them."""
-    from repo_agent_harness import scaffold
+    from harness import scaffold
 
     (repo / "AGENTS.md").write_text(f"# guide\n{scaffold.SECTION_BEGIN}\nworkflow\n{scaffold.SECTION_END}\n")
     (repo / "agent" / "policies").mkdir(parents=True)

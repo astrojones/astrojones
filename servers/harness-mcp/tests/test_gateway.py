@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import anyio
 import pytest
 from fastmcp.client.transports import StdioTransport
-from repo_agent_harness import gateway, health
+from harness import gateway, health
 
 pytestmark = pytest.mark.anyio
 
@@ -139,7 +139,7 @@ async def test_diagnostics_live_through_fake_serena(repo):
 def test_server_exposes_proxied_serena_tools():
     import asyncio
 
-    from repo_agent_harness import server
+    from harness import server
 
     names = {t.name for t in asyncio.run(server.mcp.list_tools())}
     assert {"serena_find_symbol", "serena_initial_instructions", "repo_health"} <= names

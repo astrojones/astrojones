@@ -27,8 +27,8 @@ try:
 except ImportError:  # keep the package importable in minimal (hook) environments
     yaml = None
 
-from repo_agent_harness import git, policies, shell, verify
-from repo_agent_harness.models import CheckResult, HealthCheckConfig, HealthConfig, HealthSnapshot
+from harness import git, policies, shell, verify
+from harness.models import CheckResult, HealthCheckConfig, HealthConfig, HealthSnapshot
 
 CACHE_TTL_SECONDS = 300
 _MAX_OUTPUT = 4000
@@ -46,7 +46,7 @@ class DiagnosticsGateway(Protocol):
 
 def load_config(root: str) -> HealthConfig:
     """Load health.yml from config resolution chain, falling back to built-in defaults."""
-    from repo_agent_harness.paths import harness_home, repo_id  # noqa: PLC0415
+    from harness.paths import harness_home, repo_id  # noqa: PLC0415
 
     h = harness_home()
     rid = repo_id(root)

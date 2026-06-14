@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import anyio
 import watchfiles
 
-from repo_agent_harness import shell
+from harness import shell
 
 if TYPE_CHECKING:
     from collections.abc import Callable

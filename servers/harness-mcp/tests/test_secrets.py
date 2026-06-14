@@ -1,4 +1,4 @@
-from repo_agent_harness import secrets
+from harness import secrets
 
 
 def test_is_secret_path_env():

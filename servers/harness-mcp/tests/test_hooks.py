@@ -3,7 +3,7 @@
 import io
 import json
 
-from repo_agent_harness import cli
+from harness import cli
 
 
 def _run(payload, repo, monkeypatch, capsys, raw=None, event="pre-tool-use"):

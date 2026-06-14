@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from repo_agent_harness import (
+from harness import (
     agent_hooks,
     context,
     deploy,

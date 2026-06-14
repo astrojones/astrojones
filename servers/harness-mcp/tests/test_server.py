@@ -1,6 +1,6 @@
 import json
 
-from repo_agent_harness import server
+from harness import server
 
 
 def test_server_instructions_present():

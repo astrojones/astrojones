@@ -43,7 +43,7 @@ class SecretsConfig:
 
 def load(root: str | Path) -> SecretsConfig:
     """Load SecretsConfig from the config resolution chain, or return defaults."""
-    from repo_agent_harness.paths import harness_home, repo_id  # noqa: PLC0415
+    from harness.paths import harness_home, repo_id  # noqa: PLC0415
 
     h = harness_home()
     rid = repo_id(str(root))
