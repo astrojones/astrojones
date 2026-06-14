@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "astrojones": {
+      "source": {
+        "source": "github",
+        "repo": "astrojones/claude-plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "raisl@astrojones": true
+  }
+}
