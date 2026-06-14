@@ -1,7 +1,7 @@
 [project]
-name = "astrojones-dev"
+name = "raisl"
 version = "0.3.1"
-description = "Dev/test tooling for the astrojones-dev plugin (tests the template deploy tools)."
+description = "Dev/test tooling for the raisl plugin (tests the template deploy tools)."
 requires-python = ">=3.12"
 
 [tool.uv]
