@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/astrojones/raisl/compare/v1.0.0...v1.0.1) (2026-06-14)
+
+
+### Bug Fixes
+
+* **agents:** repair stale astrojones-dev MCP tool prefix in agent tool lists ([73328d3](https://github.com/astrojones/raisl/commit/73328d3f012f9c28a03b56ae126b7bbc4c0521d6))
+
 ## [1.0.0](https://github.com/astrojones/raisl/compare/v0.14.0...v1.0.0) (2026-06-14)
 
 
