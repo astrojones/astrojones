@@ -10,7 +10,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a PAT so the auto-merge below re-triggers this workflow and
+          # the release/tag actually gets cut. Falls back to GITHUB_TOKEN, which
+          # still opens (and merges) the release PR but, due to GitHub's
+          # recursion guard, won't auto-tag until the next push to main.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Auto-merge the release PR the moment release-please opens/updates it, so
+      # releases are hands-off. `main` is unprotected and no checks are required,
+      # so a plain squash merge lands immediately.
+      - name: Auto-merge the release PR
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          number=$(printf '%s' '${{ steps.release.outputs.pr }}' | jq -r '.number')
+          echo "Auto-merging release PR #${number}"
+          gh pr merge "${number}" --squash --repo "${GITHUB_REPOSITORY}"
