@@ -46,7 +46,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 # Single owner of the child Serena process; created without connecting (lazy).
-_serena = gateway.SerenaGateway(git.repo_root() or str(Path.cwd()))
+# The root is resolved on the first serena_* call — not here at import time — so the
+# child Serena attaches to the real project even when the server process started
+# elsewhere (e.g. $HOME in a cloud session, before CLAUDE_PROJECT_DIR/cwd is settled).
+_serena = gateway.SerenaGateway(git.repo_root)
 
 
 _AGENTS_MD_OPT_OUT = ".harness-no-agents-md"
