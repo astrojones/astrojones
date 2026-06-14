@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/astrojones/raisl/compare/v1.0.2...v1.1.0) (2026-06-14)
+
+
+### Features
+
+* add SessionStart hook to initialize Serena with project directory ([aef26de](https://github.com/astrojones/raisl/commit/aef26de9fb40ea2f212b05a41362cf4535d6c566))
+
+
+### Bug Fixes
+
+* resolve Serena's repo root lazily at first call, not at server import ([c971144](https://github.com/astrojones/raisl/commit/c971144561bcb288e11f1251b477baf919b3ada0))
+
 ## [1.0.2](https://github.com/astrojones/raisl/compare/v1.0.1...v1.0.2) (2026-06-14)
 
 
