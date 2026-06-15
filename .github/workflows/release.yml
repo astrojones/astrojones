@@ -1,0 +1,21 @@
+name: release
+
+# No-PR release: on push to main, derive the next version from conventional
+# commits, stamp it into the plugin manifest + the MCP server's pyproject, commit
+# [skip ci], and tag + release — no PR (replaces release-please).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: astrojones/.github/.github/workflows/release.yml@main
+    secrets: inherit
+    with:
+      version-files: |
+        .claude-plugin/plugin.json
+        servers/harness-mcp/pyproject.toml
