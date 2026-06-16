@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 SERENA_PIN = "2449313c0d7427275c4c66aedff7d4881782f713"
 SERENA_SPEC_ENV = "REPO_AGENT_HARNESS_SERENA_SPEC"
 SERENA_CMD_ENV = "REPO_AGENT_HARNESS_SERENA_CMD"
+SERENA_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_TIMEOUT"
+_DEFAULT_SERENA_TIMEOUT = 60.0
 TOOL_PREFIX = "serena_"
 _SNAPSHOT_NAME = "serena_tools.json"
 
@@ -59,6 +61,25 @@ def serena_spec() -> str:
     Mirrors the pyproject ``serena-agent`` dependency; env-overridable.
     """
     return os.environ.get(SERENA_SPEC_ENV) or f"git+https://github.com/oraios/serena@{SERENA_PIN}"
+
+
+def serena_timeout() -> float:
+    """Return the per-call Serena timeout in seconds (env-overridable).
+
+    Read at call time so tests can override it via the environment. A non-positive
+    or unparseable override falls back to the default rather than failing the call.
+
+    Returns:
+        The timeout in seconds; the default when unset, empty, invalid, or <= 0.
+    """
+    raw = os.environ.get(SERENA_TIMEOUT_ENV)
+    if not raw:
+        return _DEFAULT_SERENA_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_SERENA_TIMEOUT
+    return value if value > 0 else _DEFAULT_SERENA_TIMEOUT
 
 
 def serena_args(root: str) -> list[str]:
@@ -132,10 +153,22 @@ class SerenaGateway:
         return self._client
 
     async def call(self, name: str, arguments: dict) -> types.CallToolResult:
-        """Forward one tool call to Serena (launches the child on first use)."""
+        """Forward one tool call to Serena (launches the child on first use).
+
+        The forwarded call is bounded by :func:`serena_timeout` so a hung or slow
+        language-server call cannot block the harness indefinitely.
+
+        Raises:
+            TimeoutError: If Serena does not respond within the timeout.
+        """
         client = self._ensure_client()
         async with client:
-            return await client.call_tool_mcp(name, arguments)
+            try:
+                with anyio.fail_after(serena_timeout()):
+                    return await client.call_tool_mcp(name, arguments)
+            except TimeoutError:
+                msg = f"serena call {name!r} timed out after {serena_timeout()}s"
+                raise TimeoutError(msg) from None
 
     def call_from_thread(self, name: str, arguments: dict) -> types.CallToolResult:
         """Sync facade for callers running in a worker thread (e.g. health checks)."""

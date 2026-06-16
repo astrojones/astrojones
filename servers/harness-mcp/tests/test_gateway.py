@@ -81,6 +81,48 @@ async def test_crash_then_recover(repo):
         await gw.aclose()
 
 
+@pytest.mark.timeout(30)
+async def test_call_times_out(repo, monkeypatch):
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "0.5")
+    gw = _fake_gateway(repo)
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            await gw.call("hang", {})
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_recovers_after_timeout(repo, monkeypatch):
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "0.5")
+    gw = _fake_gateway(repo)
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            await gw.call("hang", {})
+        result = await gw.call("find_symbol", {"name_path": "again"})
+        assert (result.structuredContent or {}).get("echo") == "again"
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_concurrent_calls_share_session(repo):
+    gw = _fake_gateway(repo)
+    results: dict[int, str] = {}
+
+    async def one(i: int) -> None:
+        result = await gw.call("find_symbol", {"name_path": str(i)})
+        results[i] = (result.structuredContent or {}).get("echo")
+
+    try:
+        async with anyio.create_task_group() as tg:
+            for i in range(8):
+                tg.start_soon(one, i)
+        assert results == {i: str(i) for i in range(8)}
+    finally:
+        await gw.aclose()
+
+
 async def test_proxied_tool_run_maps_result(repo):
     gw = _fake_gateway(repo)
     try:
