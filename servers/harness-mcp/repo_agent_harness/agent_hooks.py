@@ -11,11 +11,10 @@ blocks legitimate work.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
-from repo_agent_harness import git, policies, secrets
+from repo_agent_harness import git, policies, secrets, serena_gate
 
 _GUARDED_FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit"}
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -36,61 +35,24 @@ def _deny(reason: str) -> dict:
     }
 
 
-# Code-file extensions whose discovery must go through Serena (kept local so the hot-path
-# hook never imports the heavier context module). Mirrors context.LANG_BY_EXT.
-_CODE_EXTENSIONS = frozenset(
-    {
-        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".kt",
-        ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".php", ".swift", ".scala", ".dart",
-        ".ex", ".exs", ".lua", ".sh",
-    }
-)
-
-_SERENA_GATE_ENV = "REPO_AGENT_HARNESS_NO_SERENA_GATE"
-
-_SERENA_GATE_MSG_UNBOARDED = (
-    "Read is forbidden for code discovery in this repo. "
-    "FIRST call serena_initial_instructions, then run serena_onboarding to write project memories. "
-    "Then navigate by symbol (serena_get_symbols_overview / serena_find_symbol). "
-    f"(Set {_SERENA_GATE_ENV}=1 to disable this gate.)"
-)
-
-_SERENA_GATE_MSG_BOARDED = (
-    "Read is forbidden for code discovery in this repo. Navigate by symbol "
-    "(serena_get_symbols_overview / serena_find_symbol) instead. "
-    f"(Set {_SERENA_GATE_ENV}=1 to disable this gate.)"
-)
-
-
-def _serena_onboarded(rootp: Path) -> bool:
-    """Return whether the repo has Serena project memories beyond the scaffolded note."""
-    mem_dir = rootp / ".serena" / "memories"
-    try:
-        return mem_dir.is_dir() and any(
-            p.suffix == ".md" and p.stem != "memory_maintenance" for p in mem_dir.iterdir()
-        )
-    except OSError:
-        return True  # fail open: uncertainty must never block a read
-
-
 def _serena_gate_blocks(repo: str, path: str) -> tuple[bool, str]:
-    """Return (blocks: bool, message: str) to decide if a Read of ``path`` is denied.
+    """Return (blocks, message) deciding whether a native Read of ``path`` is denied.
 
-    Denies reads of *code* files to force persistent Serena-first navigation. Message
-    varies by onboarding status. Fails OPEN (returns False, "") for non-code files,
-    paths outside the repo, the env escape, or any error.
+    Denies reads of *code* files to keep code discovery on Serena; the message varies by
+    onboarding status (serena_gate.UNBOARDED_MSG vs BOARDED_MSG). Fails OPEN for non-code
+    files, paths outside the repo, the env escape, or any error. The same predicate gates
+    repo_read_range in server.py, so no ungated whole-file code path is left open.
     """
-    if os.environ.get(_SERENA_GATE_ENV) == "1":
+    if serena_gate.gate_disabled():
         return False, ""
     try:
         target = Path(path).resolve()
         rootp = Path(repo).resolve()
         if rootp != target and rootp not in target.parents:
             return False, ""  # outside the repo — not our concern
-        if target.suffix.lower() not in _CODE_EXTENSIONS:
+        if not serena_gate.is_code_file(target):
             return False, ""  # non-code files are always readable
-        # Code files are *always* denied; vary message by onboarding status.
-        msg = _SERENA_GATE_MSG_UNBOARDED if not _serena_onboarded(rootp) else _SERENA_GATE_MSG_BOARDED
+        msg = serena_gate.UNBOARDED_MSG if not serena_gate.is_onboarded(rootp) else serena_gate.BOARDED_MSG
         return True, msg  # noqa: TRY300 — intentional return in try; fallthrough catch is fail-open
     except OSError:
         return False, ""  # fail open
@@ -144,9 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     """Lightweight hook entry: ``python -m repo_agent_harness.agent_hooks <event>``.
 
     The plugin's PreToolUse shim calls this instead of ``repo-agent-harness hook`` so it imports
-    only this module (and git/policies/secrets), not the full CLI graph (gateway, health, verify,
-    …) — ~40ms vs ~600ms per tool call. Reads the event JSON on stdin, prints the decision JSON.
-    Fail-open by contract: any error prints an empty response and exits 0.
+    only this module (and git/policies/secrets/serena_gate), not the full CLI graph (gateway,
+    health, verify, …) — ~40ms vs ~600ms per tool call. Reads the event JSON on stdin, prints the
+    decision JSON. Fail-open by contract: any error prints an empty response and exits 0.
     """
     args = sys.argv[1:] if argv is None else argv
     event = args[0] if args else "pre-tool-use"

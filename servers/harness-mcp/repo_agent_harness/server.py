@@ -37,6 +37,7 @@ from repo_agent_harness import (
     policies,
     prompts_registry,
     scaffold,
+    serena_gate,
     verify,
     watcher,
 )
@@ -132,6 +133,24 @@ def _no_repo() -> dict:
     return {"error": "not inside a git repository; start the server from a repo root"}
 
 
+def _serena_read_gate(root: str, path: str) -> dict | None:
+    """Refuse a pre-onboarding whole-file *code* read so repo_read_range can't bypass onboarding.
+
+    Returns an onboarding directive (as a normal tool-error dict) when the gate is active, the
+    target is a code file, and the repo is not yet onboarded; otherwise None (proceed). Mirrors
+    the native-Read gate in agent_hooks so the two stay in lockstep — closing the escape observed
+    in session 9e6fd520, where the agent read code via repo_read_range and never onboarded.
+    """
+    if serena_gate.gate_disabled() or not serena_gate.is_code_file(path):
+        return None
+    try:
+        if serena_gate.is_onboarded(Path(root).resolve()):
+            return None
+    except OSError:
+        return None  # fail open: uncertainty must never block a read
+    return {"error": serena_gate.UNBOARDED_MSG, "path": path}
+
+
 # --------------------------------------------------------------------------- tools
 
 
@@ -190,9 +209,16 @@ def repo_read_range(
     start_line: Annotated[int, Field(ge=1)] = 1,
     end_line: Annotated[int, Field(ge=1)] = 200,
 ) -> dict:
-    """Read a bounded line range. Refuses secrets/binaries; blocks path traversal; line-capped."""
+    """Read a bounded line range. Refuses secrets/binaries; blocks path traversal; line-capped.
+
+    Pre-onboarding it refuses *code* files (mirroring the native-Read gate) so onboarding cannot
+    be skipped via this tool; once the repo is onboarded it is the blessed precise-range reader.
+    """
     root = git.repo_root()
-    return context.read_range(root, path, start_line, end_line) if root else _no_repo()
+    if not root:
+        return _no_repo()
+    gated = _serena_read_gate(root, path)
+    return gated if gated is not None else context.read_range(root, path, start_line, end_line)
 
 
 @mcp.tool()

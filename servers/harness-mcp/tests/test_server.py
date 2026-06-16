@@ -50,3 +50,33 @@ def test_res_impact_resource(repo, monkeypatch):
     result = json.loads(server.res_impact("src/payment.py"))
     assert "risk" in result
     assert result["risk"] == "high"
+
+
+def test_read_range_blocks_code_when_not_onboarded(repo, monkeypatch):
+    """Pre-onboarding, repo_read_range refuses code like native Read (the session-9e6fd520 escape)."""
+    monkeypatch.chdir(repo)
+    out = server.repo_read_range("src/payment.py")
+    assert "content" not in out
+    assert "serena_onboarding" in out["error"]
+
+
+def test_read_range_allows_non_code_when_not_onboarded(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    out = server.repo_read_range("pyproject.toml")
+    assert "content" in out
+
+
+def test_read_range_allows_code_once_onboarded(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    mem = repo / ".serena" / "memories"
+    mem.mkdir(parents=True)
+    (mem / "core.md").write_text("onboarded\n")
+    out = server.repo_read_range("src/payment.py")
+    assert "def charge" in out["content"]
+
+
+def test_read_range_env_escape_allows_code(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
+    out = server.repo_read_range("src/payment.py")
+    assert "def charge" in out["content"]
