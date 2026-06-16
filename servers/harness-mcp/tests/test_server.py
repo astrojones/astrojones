@@ -80,3 +80,37 @@ def test_read_range_env_escape_allows_code(repo, monkeypatch):
     monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
     out = server.repo_read_range("src/payment.py")
     assert "def charge" in out["content"]
+
+
+def test_autoseed_onboards_fresh_repo(repo, monkeypatch):
+    """Auto-seed writes a project_overview memory so a fresh repo is onboarded before the agent acts."""
+    monkeypatch.chdir(repo)
+    assert not server.serena_gate.is_onboarded(repo)
+    server._autoseed_onboarding(str(repo))
+    mem = repo / ".serena" / "memories" / "project_overview.md"
+    assert mem.is_file()
+    assert server.serena_gate.is_onboarded(repo)
+    # the seeded memory is portable: no absolute paths committed
+    assert str(repo) not in mem.read_text()
+
+
+def test_autoseed_is_idempotent_and_preserves_existing(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    mem_dir = repo / ".serena" / "memories"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "core.md").write_text("real onboarding\n")
+    server._autoseed_onboarding(str(repo))
+    # already onboarded → does not overwrite or add the seed
+    assert not (mem_dir / "project_overview.md").exists()
+    assert (mem_dir / "core.md").read_text() == "real onboarding\n"
+
+
+def test_autoseed_skips_when_gate_disabled(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
+    server._autoseed_onboarding(str(repo))
+    assert not (repo / ".serena" / "memories" / "project_overview.md").exists()
+
+
+def test_autoseed_noop_outside_repo():
+    server._autoseed_onboarding(None)  # must not raise
