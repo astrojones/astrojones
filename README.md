@@ -37,11 +37,14 @@ setup.
 - **Safety hooks** — a safe-shell + secret-read guard (PreToolUse) and a post-edit
   verification nudge (PostToolUse).
 - **Generic coding-workflow skills** — `bugfix`, `feature`, `refactor`, `test`, `implement`,
-  `commit`.
+  `commit` (served as MCP prompts; see the drift note below), plus the Claude-Code-only `plan`
+  skill: harness-native plan mode that drives the read-only `explorer` and `architect` subagents
+  in place of the built-in `Explore`/`Plan` agents.
 - **Workflow subagents** — `implementer`, `reviewer`, `test-runner` (TDD streams, diff
   review, narrow verification), `explorer` (read-only symbol navigation — the harness-native
   replacement for the built-in `Explore` agent; prefer it for any code exploration), and
-  `fullstack-architect` (typed UI⇄backend vertical slices).
+  `architect` (read-only design/planning — the harness-native replacement for the built-in
+  `Plan` agent; hands the build to `implementer`).
 
 ## Materializing the on-disk harness (opt-in)
 

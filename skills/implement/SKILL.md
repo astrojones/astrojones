@@ -108,8 +108,10 @@ questions (`AskUserQuestion`) — or, if the `superpowers` plugin is available, 
 
 ## Phase 2 — Plan
 
-Decompose the work into **streams** with explicit, disjoint file ownership. Use
-`sequential-thinking` if available; otherwise decompose directly.
+Decompose the work into **streams** with explicit, disjoint file ownership. For a non-trivial
+design, first dispatch the read-only **`architect`** subagent (the harness-native `Plan`
+equivalent) to produce the plan — critical files, contract, sequencing, trade-offs — then
+decompose it into streams. Use `sequential-thinking` if available; otherwise decompose directly.
 
 - Streams with **disjoint file sets** run in parallel; streams that share files run
   sequentially.

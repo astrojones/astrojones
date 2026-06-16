@@ -101,7 +101,10 @@ questions, then re-score. <70% → stop and request context.
 
 ## Phase 2 — Plan
 
-Decompose the work into **streams** with explicit, disjoint file ownership.
+Decompose the work into **streams** with explicit, disjoint file ownership. For a non-trivial
+design, first dispatch the read-only **`architect`** subagent (the harness-native `Plan`
+equivalent) to produce the plan — critical files, contract, sequencing, trade-offs — then
+decompose it into streams.
 
 - Streams with **disjoint file sets** run in parallel; streams that share files run
   sequentially.
