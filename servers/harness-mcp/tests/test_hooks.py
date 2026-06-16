@@ -3,7 +3,7 @@
 import io
 import json
 
-from repo_agent_harness import cli
+from repo_agent_harness import agent_hooks, cli
 
 
 def _run(payload, repo, monkeypatch, capsys, raw=None, event="pre-tool-use"):
@@ -56,3 +56,42 @@ def test_post_quiet_on_read(repo, monkeypatch, capsys):
     rc, out = _run({"tool_name": "Read", "tool_input": {}}, repo, monkeypatch, capsys, event="post-tool-use")
     assert rc == 0
     assert out == {}
+
+
+def test_gate_blocks_code_read_when_not_onboarded(tmp_path):
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is True
+
+
+def test_gate_allows_non_code_read(tmp_path):
+    (tmp_path / "README.md").write_text("# hi\n")
+    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "README.md")) is False
+
+
+def test_gate_allows_code_read_when_onboarded(tmp_path):
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    mem = tmp_path / ".serena" / "memories"
+    mem.mkdir(parents=True)
+    (mem / "core.md").write_text("onboarded\n")
+    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is False
+
+
+def test_gate_blocks_when_only_maintenance_memory(tmp_path):
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    mem = tmp_path / ".serena" / "memories"
+    mem.mkdir(parents=True)
+    (mem / "memory_maintenance.md").write_text("conventions\n")
+    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is True
+
+
+def test_gate_env_escape_allows_code_read(tmp_path, monkeypatch):
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
+    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is False
+
+
+def test_gate_ignores_path_outside_repo(tmp_path):
+    (tmp_path / "outside.py").write_text("x = 1\n")
+    inner = tmp_path / "repo"
+    inner.mkdir()
+    assert agent_hooks._serena_gate_blocks(str(inner), str(tmp_path / "outside.py")) is False

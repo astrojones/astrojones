@@ -84,13 +84,19 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
 
 _INSTRUCTIONS = """\
 Safe, repo-aware tools for the git repo at the current working directory: repo facts
-(repo_* tools) and semantic code navigation (serena_* tools, launched on first use —
-call serena_initial_instructions before symbol work).
+(repo_* tools) and semantic code navigation (serena_* tools, launched on first use).
 
-- Call repo_context_overview first to orient (languages, entrypoints, important paths).
-- Navigate by symbol: prefer serena_* (find_symbol, find_referencing_symbols,
-  get_symbols_overview) for code and repo_search_*/repo_read_range for files. Read precise
-  ranges; never dump whole files or recursively read the tree.
+**For any task that touches code, your FIRST action is `serena_initial_instructions`** — it
+loads the Serena navigation manual and launches the symbol server. Do this before any native
+Read/Grep of code, then navigate by symbol. (Skip only for pure non-code chores.)
+**If it reports the project is not onboarded, run `serena_onboarding` and complete it** (write
+the project memories it asks for) — a one-time per-repo step — before deep work.
+
+- Navigate by symbol: serena_* (find_symbol, find_referencing_symbols, get_symbols_overview)
+  for code; repo_search_*/repo_read_range for files. Read precise ranges; never dump whole
+  files or recursively read the tree. Native Read/Grep are a fallback ONLY when Serena cannot
+  answer (non-code files, not-yet-indexed) — never for code discovery.
+- Call repo_context_overview to orient (languages, entrypoints, important paths).
 - In Claude Code, to map an unfamiliar or multi-file region dispatch the `explorer`
   subagent — it runs this same serena+harness navigation read-only and returns a cited
   reading list. It is the harness-native replacement for the built-in `Explore` agent;
