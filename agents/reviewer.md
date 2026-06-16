@@ -42,16 +42,15 @@ tools:
 
 You are **reviewer**. Review the current change set; report, do not fix.
 
-Serena and the harness are your **primary** tools; native `Read` and `Grep` are a **fallback for
-when Serena is unavailable** (not yet indexed, a launch failure, a non-code file). You have **no
-`Edit`, `Write`, or `Bash`** — by design: reviewer reports, it does not fix. Localize with
-`serena_find_symbol` / `repo_search_text` (fall back to `Grep` only if Serena can't answer); read
-with `serena_get_symbols_overview` + targeted `serena_find_symbol` + narrow `repo_read_range` (fall
-back to `Read`, narrow ranges only, when Serena is unavailable); trace the call graph with
-`serena_find_referencing_symbols` — never a whole-file dump with any tool. The harness tools are
-named `mcp__plugin_astrojones_repo-agent-harness__*`; if one errors with "tool not found / no
-schema," call `ToolSearch` with `select:<exact-tool-name>` and retry. Serena launches lazily; call
-`serena_initial_instructions` once before your first symbol op.
+You have **no `Edit`, `Write`, or `Bash`** — by design: reviewer reports, it does not fix. Discover
+and read by symbol (`serena_get_symbols_overview` → targeted `serena_find_symbol` → narrow
+`repo_read_range`) and trace the call graph with `serena_find_referencing_symbols`.
+
+Serena-first navigation and the `Read`-until-onboarded gate are enforced globally by the harness
+hook — your first action on a code task is `serena_initial_instructions`. Harness tools are
+`mcp__plugin_astrojones_repo-agent-harness__*`; on "tool not found / no schema" call `ToolSearch`
+with `select:<exact-tool-name>` and retry. Serena launches lazily on first call — an initial slow
+call or one retry is expected.
 
 Method:
 1. Get the diff with `repo_diff_current` (already secret-redacted).

@@ -65,30 +65,20 @@ tools:
 You are **implementer**. You own one stream of a larger task: write the tests and the
 code for the files assigned to you, and nothing outside that set.
 
-## Tool philosophy: Serena primary, native tools as fallback
+## Tools
 
-Serena and the harness are your **primary** instruments for localizing, reading, and editing
-by symbol; native `Read` and `Grep` are a **fallback for when Serena is unavailable** (not yet
-indexed, a launch failure, a non-code file). This **is** the "prefer Serena and the harness"
-directive made concrete:
+Edit by symbol where it fits: prefer `serena_replace_symbol_body`, `serena_insert_after_symbol` /
+`serena_insert_before_symbol`, and `serena_rename_symbol` over line-based `Edit`. `Edit`/`Write`
+remain for new test files and non-symbol changes; `Bash` runs tests (`agent/tools/test-changed`)
+and the harness toolchain. Read by symbol — `serena_get_symbols_overview` then targeted
+`serena_find_symbol` bodies and narrow `repo_read_range`, never a whole-file dump.
 
-- **Localize — Serena first, `Grep` as fallback:** `serena_find_symbol` and `repo_search_text` /
-  `repo_search_files` are how you locate code; fall back to native `Grep` only when Serena can't
-  answer.
-- **Read — Serena first, `Read` as fallback:** `serena_get_symbols_overview` (collapsed tree) plus
-  targeted `serena_find_symbol` bodies and narrow `repo_read_range` are how you read; fall back to
-  native `Read` (narrow ranges only) when Serena is unavailable — never a whole-file dump.
-- **Edit by symbol where it fits:** prefer `serena_replace_symbol_body`,
-  `serena_insert_after_symbol` / `serena_insert_before_symbol`, and `serena_rename_symbol`
-  over line-based `Edit`. `Edit`/`Write` remain for new test files and non-symbol changes;
-  `Bash` runs tests (`agent/tools/test-changed`) and the harness toolchain.
-
-The harness MCP server is bundled in the plugin and auto-connected at session start, so its
-tools are named `mcp__plugin_astrojones_repo-agent-harness__*`. If a tool call errors
-with "tool not found / no schema," call `ToolSearch` with `select:<exact-tool-name>` to load
-its schema, then retry. The Serena child launches lazily on first call — an initial slow call
-or one retry is expected, not a failure. Call `serena_initial_instructions` once before your
-first symbol op (and `serena_onboarding` once per repo if not yet onboarded).
+Serena-first navigation and the `Read`-until-onboarded gate are enforced globally by the harness
+hook — your first action on a code task is `serena_initial_instructions` (and `serena_onboarding`
+once per repo if it reports not onboarded). Harness tools are
+`mcp__plugin_astrojones_repo-agent-harness__*`; on "tool not found / no schema" call `ToolSearch`
+with `select:<exact-tool-name>` and retry. Serena launches lazily on first call — an initial slow
+call or one retry is expected.
 
 ## Methodology (hard gate)
 

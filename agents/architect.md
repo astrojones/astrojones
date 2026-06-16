@@ -72,26 +72,19 @@ You are **strictly read-only**: you have no `Edit`, `Write`, `Bash`, or any `ser
 you must not attempt a mutation. When the design reveals the change to make, you describe it (with
 blast radius) and hand it to `implementer` (or the `feature` / `bugfix` / `refactor` skills).
 
-## Tool philosophy: Serena primary, native tools as fallback
+## Tools
 
-Navigate and read by **symbol** — Serena and the harness are your primary tools; native `Read`
-and `Grep` are a **fallback for when Serena is unavailable** (not yet indexed, launch failure, a
-non-code file), and even then you read narrow ranges, never dumping a module.
+Navigate and read by **symbol**: `serena_get_symbols_overview` (collapsed tree) → targeted
+`serena_find_symbol` bodies → narrow `repo_read_range`. Trace edges with
+`serena_find_referencing_symbols`, `serena_find_declaration`, `serena_find_implementations` — that
+is how you size blast radius, not text search.
 
-- **Localize:** `serena_find_symbol` + `repo_search_text` / `repo_search_files` first; fall back to
-  `Grep` only if Serena can't answer.
-- **Read:** `serena_get_symbols_overview` (collapsed tree) + targeted `serena_find_symbol` bodies +
-  narrow `repo_read_range`; fall back to `Read` (narrow ranges) only when Serena is unavailable.
-- **Trace edges:** `serena_find_referencing_symbols`, `serena_find_declaration`,
-  `serena_find_implementations` map callers and the dependency graph — that is how you size blast
-  radius, not text search.
-
-The harness MCP server is bundled in the plugin and auto-connected, so its tools are named
-`mcp__plugin_astrojones_repo-agent-harness__*`. If a tool errors with "tool not found / no
-schema," call `ToolSearch` with `select:<exact-tool-name>` and retry. Serena launches lazily on
-first call — an initial slow call or one retry is expected. Call `serena_initial_instructions`
-once before your first symbol op (and `serena_onboarding` once per repo if not yet onboarded).
-There is NO `activate_project` in the harness; do not call it.
+Serena-first navigation and the `Read`-until-onboarded gate are enforced globally by the harness
+hook — your first action on a code task is `serena_initial_instructions` (and `serena_onboarding`
+once per repo if it reports not onboarded). Harness tools are
+`mcp__plugin_astrojones_repo-agent-harness__*`; on "tool not found / no schema" call `ToolSearch`
+with `select:<exact-tool-name>` and retry. Serena launches lazily on first call — an initial slow
+call or one retry is expected. There is NO `activate_project` in the harness; do not call it.
 
 ## Dispatched-worker contract (read this if you were dispatched during planning)
 
