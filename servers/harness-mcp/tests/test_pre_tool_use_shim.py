@@ -67,9 +67,10 @@ def test_shim_denies_code_read_when_not_onboarded(tmp_path):
     assert _denied(_drive(repo, _read(repo, "foo.py")))
 
 
-def test_shim_allows_code_read_when_onboarded(tmp_path):
+def test_shim_denies_code_read_even_when_onboarded(tmp_path):
+    """Persistent Serena preference: code reads denied regardless of onboarding status."""
     repo = _git_repo(tmp_path, onboarded=True)
-    assert not _denied(_drive(repo, _read(repo, "foo.py")))
+    assert _denied(_drive(repo, _read(repo, "foo.py")))
 
 
 def test_shim_allows_non_code_read(tmp_path):

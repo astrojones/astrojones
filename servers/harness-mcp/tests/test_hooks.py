@@ -60,20 +60,22 @@ def test_post_quiet_on_read(repo, monkeypatch, capsys):
 
 def test_gate_blocks_code_read_when_not_onboarded(tmp_path):
     (tmp_path / "mod.py").write_text("x = 1\n")
-    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is True
-
+    blocks, msg = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"))
+    assert blocks is True and msg
 
 def test_gate_allows_non_code_read(tmp_path):
     (tmp_path / "README.md").write_text("# hi\n")
-    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "README.md")) is False
+    blocks, _ = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "README.md"))
+    assert blocks is False
 
-
-def test_gate_allows_code_read_when_onboarded(tmp_path):
+def test_gate_denies_code_read_even_when_onboarded(tmp_path):
+    """Persistent Serena preference: code reads denied regardless of onboarding status."""
     (tmp_path / "mod.py").write_text("x = 1\n")
     mem = tmp_path / ".serena" / "memories"
     mem.mkdir(parents=True)
     (mem / "core.md").write_text("onboarded\n")
-    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is False
+    blocks, msg = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"))
+    assert blocks is True and "Navigate by symbol" in msg
 
 
 def test_gate_blocks_when_only_maintenance_memory(tmp_path):
@@ -81,17 +83,20 @@ def test_gate_blocks_when_only_maintenance_memory(tmp_path):
     mem = tmp_path / ".serena" / "memories"
     mem.mkdir(parents=True)
     (mem / "memory_maintenance.md").write_text("conventions\n")
-    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is True
+    blocks, msg = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"))
+    assert blocks is True and "call serena_initial_instructions" in msg
 
 
 def test_gate_env_escape_allows_code_read(tmp_path, monkeypatch):
     (tmp_path / "mod.py").write_text("x = 1\n")
     monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
-    assert agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py")) is False
+    blocks, _ = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"))
+    assert blocks is False
 
 
 def test_gate_ignores_path_outside_repo(tmp_path):
     (tmp_path / "outside.py").write_text("x = 1\n")
     inner = tmp_path / "repo"
     inner.mkdir()
-    assert agent_hooks._serena_gate_blocks(str(inner), str(tmp_path / "outside.py")) is False
+    blocks, _ = agent_hooks._serena_gate_blocks(str(inner), str(tmp_path / "outside.py"))
+    assert blocks is False

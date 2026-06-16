@@ -48,11 +48,16 @@ _CODE_EXTENSIONS = frozenset(
 
 _SERENA_GATE_ENV = "REPO_AGENT_HARNESS_NO_SERENA_GATE"
 
-_SERENA_GATE_MSG = (
-    "Read is forbidden for code discovery in a repo that is not yet Serena-onboarded. "
-    "FIRST call serena_initial_instructions, then run serena_onboarding to write the project "
-    "memories; afterwards navigate by symbol (serena_get_symbols_overview / serena_find_symbol) "
-    "and reserve Read for non-code files or a few lines after an overview. "
+_SERENA_GATE_MSG_UNBOARDED = (
+    "Read is forbidden for code discovery in this repo. "
+    "FIRST call serena_initial_instructions, then run serena_onboarding to write project memories. "
+    "Then navigate by symbol (serena_get_symbols_overview / serena_find_symbol). "
+    f"(Set {_SERENA_GATE_ENV}=1 to disable this gate.)"
+)
+
+_SERENA_GATE_MSG_BOARDED = (
+    "Read is forbidden for code discovery in this repo. Navigate by symbol "
+    "(serena_get_symbols_overview / serena_find_symbol) instead. "
     f"(Set {_SERENA_GATE_ENV}=1 to disable this gate.)"
 )
 
@@ -68,25 +73,27 @@ def _serena_onboarded(rootp: Path) -> bool:
         return True  # fail open: uncertainty must never block a read
 
 
-def _serena_gate_blocks(repo: str, path: str) -> bool:
-    """Return whether a Read of ``path`` must be denied to force Serena-first navigation.
+def _serena_gate_blocks(repo: str, path: str) -> tuple[bool, str]:
+    """Return (blocks: bool, message: str) to decide if a Read of ``path`` is denied.
 
-    Blocks reads of *code* files in a repo that has not yet been Serena-onboarded, so agents
-    navigate by symbol and complete onboarding first. Fails OPEN (returns ``False``) for non-code
-    files, paths outside the repo, the env escape, or any error.
+    Denies reads of *code* files to force persistent Serena-first navigation. Message
+    varies by onboarding status. Fails OPEN (returns False, "") for non-code files,
+    paths outside the repo, the env escape, or any error.
     """
     if os.environ.get(_SERENA_GATE_ENV) == "1":
-        return False
+        return False, ""
     try:
         target = Path(path).resolve()
         rootp = Path(repo).resolve()
         if rootp != target and rootp not in target.parents:
-            return False  # outside the repo — not our concern
+            return False, ""  # outside the repo — not our concern
         if target.suffix.lower() not in _CODE_EXTENSIONS:
-            return False  # non-code files are always readable
-        return not _serena_onboarded(rootp)
+            return False, ""  # non-code files are always readable
+        # Code files are *always* denied; vary message by onboarding status.
+        msg = _SERENA_GATE_MSG_UNBOARDED if not _serena_onboarded(rootp) else _SERENA_GATE_MSG_BOARDED
+        return True, msg  # noqa: TRY300 — intentional return in try; fallthrough catch is fail-open
     except OSError:
-        return False  # fail open
+        return False, ""  # fail open
 
 
 def pre_tool_use(data: dict) -> dict:
@@ -113,8 +120,10 @@ def pre_tool_use(data: dict) -> dict:
                 rel = path
             if secrets.is_secret_path(rel, cfg):
                 return _deny(f"Accessing a secret path ('{rel}') is blocked by policy.")
-            if tool == "Read" and repo is not None and _serena_gate_blocks(repo, path):
-                return _deny(_SERENA_GATE_MSG)
+            if tool == "Read" and repo is not None:
+                blocks, msg = _serena_gate_blocks(repo, path)
+                if blocks:
+                    return _deny(msg)
 
     return {}
 
