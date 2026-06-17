@@ -1,5 +1,6 @@
 import json
 
+import yaml
 from repo_agent_harness import server
 
 
@@ -114,3 +115,52 @@ def test_autoseed_skips_when_gate_disabled(repo, monkeypatch):
 
 def test_autoseed_noop_outside_repo():
     server._autoseed_onboarding(None)  # must not raise
+
+
+def test_seed_serena_languages_writes_all_present(repo, monkeypatch):
+    """A repo with a secondary language gets every language seeded, not just the dominant one."""
+    monkeypatch.chdir(repo)
+    (repo / "web").mkdir()
+    (repo / "web" / "app.ts").write_text("export const x = 1\n")
+    server._seed_serena_languages(str(repo))
+    data = yaml.safe_load((repo / ".serena" / "project.yml").read_text())
+    # python dominant (3 files) ahead of the one .ts file, but both servers are activated
+    assert data["languages"] == ["python", "typescript"]
+    assert data["project_name"] == repo.name
+
+
+def test_seed_serena_languages_merges_into_existing(repo, monkeypatch):
+    """Serena writes project.yml with the dominant language only; the seed merges the rest in."""
+    monkeypatch.chdir(repo)
+    (repo / "web").mkdir()
+    (repo / "web" / "app.ts").write_text("export const x = 1\n")
+    cfg = repo / ".serena" / "project.yml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("project_name: keep\nlanguages:\n- python\nread_only: false\n")
+    server._seed_serena_languages(str(repo))
+    data = yaml.safe_load(cfg.read_text())
+    assert data["languages"] == ["python", "typescript"]
+    assert data["project_name"] == "keep"  # existing keys preserved across the merge
+    assert data["read_only"] is False
+
+
+def test_seed_serena_languages_idempotent(repo, monkeypatch):
+    """When every present language is already listed, the file is left byte-for-byte untouched."""
+    monkeypatch.chdir(repo)
+    cfg = repo / ".serena" / "project.yml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("languages:\n- python\n")
+    before = cfg.read_text()
+    server._seed_serena_languages(str(repo))
+    assert cfg.read_text() == before
+
+
+def test_seed_serena_languages_skips_when_gate_disabled(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("REPO_AGENT_HARNESS_NO_SERENA_GATE", "1")
+    server._seed_serena_languages(str(repo))
+    assert not (repo / ".serena" / "project.yml").exists()
+
+
+def test_seed_serena_languages_noop_outside_repo():
+    server._seed_serena_languages(None)  # must not raise

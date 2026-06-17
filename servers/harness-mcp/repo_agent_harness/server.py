@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
+import yaml
 from pydantic import Field
 
 try:
@@ -69,6 +70,7 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     root = git.repo_root()
     with suppress(Exception):  # best-effort: never let process cleanup block startup
         gateway.reap_stale_serena_children(root)  # kill orphaned Serena children from prior versions
+    _seed_serena_languages(root)  # ensure every repo language is active before Serena launches
     _autoseed_onboarding(root)  # one-time, best-effort: onboard the repo before the agent acts
     # a plain task, not a task group: the lifespan generator's yield must not sit
     # inside a cancel scope, or cancelled shutdown exits scopes in the wrong task
@@ -178,6 +180,45 @@ def _seed_overview_md(ov: dict) -> str:
         "Navigate code by symbol (serena_get_symbols_overview / serena_find_symbol); read precise "
         "ranges with repo_read_range. Native whole-file Read of code is gated on purpose.\n"
     )
+
+
+def _seed_serena_languages(root: str | None) -> None:
+    """Ensure ``.serena/project.yml`` lists every language the repo contains, before Serena launches.
+
+    Serena, started with only ``--project``, auto-detects a single dominant language and then
+    *raises* on symbol extraction for files of any other language present in the repo (e.g.
+    ``Cannot extract symbols ... Active languages: ['python']`` for a ``.ts`` file in a
+    Python-dominant repo). A symbol-driven agent then has no anchor and silently writes nothing.
+    Merging the full detected language list in makes the right language servers start.
+
+    Runs at startup before the lazy Serena launch, so the harness config wins the race. Serena
+    writes its own ``project.yml`` (dominant language only), so this *merges* missing languages
+    into an existing list rather than only seeding fresh repos — that is what reaches the repos
+    that already hit the bug. Idempotent (no write when nothing is missing) and best-effort
+    (never raises into startup). The yaml round-trip drops Serena's template comments only on the
+    one merge that actually adds a language; ``.serena/`` is gitignored and regenerable.
+    """
+    if root is None or serena_gate.gate_disabled():
+        return
+    with suppress(OSError, ValueError, yaml.YAMLError):  # best-effort: never raise into startup
+        rootp = Path(root).resolve()
+        wanted = context.serena_languages(root)
+        if not wanted:
+            return
+        cfg = rootp / ".serena" / "project.yml"
+        data: dict = {}
+        if cfg.exists():
+            loaded = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        current = [str(x) for x in data["languages"]] if isinstance(data.get("languages"), list) else []
+        merged = current + [k for k in wanted if k not in current]
+        if merged == current:
+            return
+        data["languages"] = merged
+        data.setdefault("project_name", rootp.name)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
 def _autoseed_onboarding(root: str | None) -> None:

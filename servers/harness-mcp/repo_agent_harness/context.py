@@ -147,15 +147,60 @@ def _harness_summary(rootp: Path) -> dict:
     }
 
 
-def overview(root: str) -> dict:
-    """Summarize the repo: languages, package managers, entrypoints, important paths, configured tools."""
+# Serena language-server keys for the display names in LANG_BY_EXT. Serena raises when asked
+# for symbols in a file whose language is not active, so .serena/project.yml must list every
+# language a repo contains. JavaScript uses the TypeScript server; C uses the C++ server.
+SERENA_LANG_KEY = {
+    "Python": "python",
+    "TypeScript": "typescript",
+    "JavaScript": "typescript",
+    "Go": "go",
+    "Rust": "rust",
+    "Ruby": "ruby",
+    "Java": "java",
+    "Kotlin": "kotlin",
+    "C": "cpp",
+    "C++": "cpp",
+    "C#": "csharp",
+    "PHP": "php",
+    "Swift": "swift",
+    "Shell": "bash",
+    "Scala": "scala",
+    "Dart": "dart",
+    "Elixir": "elixir",
+    "Lua": "lua",
+}
+
+
+def detect_languages(root: str) -> list[str]:
+    """Display-name languages present in the repo, ordered by file count (descending)."""
     files = git.list_files(root)
     counts: dict[str, int] = {}
     for f in files:
         lang = LANG_BY_EXT.get(Path(f).suffix.lower())
         if lang:
             counts[lang] = counts.get(lang, 0) + 1
-    languages = [lang for lang, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+    return [lang for lang, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
+def serena_languages(root: str) -> list[str]:
+    """Serena language-server keys for every language the repo contains, de-duplicated.
+
+    Ordered by prevalence. Serena starts language servers only for the keys listed in
+    .serena/project.yml and raises on symbol extraction for files of any other language,
+    so this must cover all languages present, not just the dominant one.
+    """
+    keys: list[str] = []
+    for display in detect_languages(root):
+        key = SERENA_LANG_KEY.get(display)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def overview(root: str) -> dict:
+    """Summarize the repo: languages, package managers, entrypoints, important paths, configured tools."""
+    languages = detect_languages(root)
 
     rootp = Path(root)
     pkgs = [name for marker, name in PKG_MANAGERS.items() if (rootp / marker).is_file()]
