@@ -19,6 +19,7 @@ Agents without an MCP client use the same operations as CLI tools under `agent/t
 - Use the **repo-agent-harness** tools for repo facts: `repo_context_overview`,
   `repo_context_status`, `repo_context_relevant_files`, `repo_search_text`, `repo_search_files`.
 - **Read precise ranges** with `repo_read_range`. Never recursively read the repo or dump whole files.
+- **In Claude Code:** to map an unfamiliar or multi-file region, dispatch the **`explorer`** subagent — it runs this same Serena+harness navigation read-only and hands back a cited reading list instead of flooding the session. It is the harness-native replacement for the generic built-in `Explore` agent; prefer it for any code exploration.
 
 ### Repo health
 - `repo_health` reports what "healthy" means for this repo — lint/typecheck/tests for changed
@@ -26,7 +27,7 @@ Agents without an MCP client use the same operations as CLI tools under `agent/t
   (add custom `command` checks; enable the `ci` check if network use is acceptable).
 
 ### Before editing
-- Identify the relevant files (`repo_context_relevant_files` + Serena).
+- Identify the relevant files (`repo_context_relevant_files` + Serena; in Claude Code, the `explorer` subagent does this read-only and returns a reading list).
 - For cross-file changes, run `repo_impact_file` and note the risk level. If risk is "high"
   (auth/payments/migrations/security/schema), confirm the plan first.
 
