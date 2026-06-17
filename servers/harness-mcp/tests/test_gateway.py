@@ -105,6 +105,62 @@ async def test_recovers_after_timeout(repo, monkeypatch):
         await gw.aclose()
 
 
+class _HangingConnect:
+    """A client whose connect (``__aenter__``) blocks forever — to test the connect timeout."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def __aenter__(self):
+        await anyio.sleep_forever()
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.timeout(30)
+async def test_connect_times_out(repo, monkeypatch):
+    # The connect (spawn + LSP boot) must be time-bounded too, not just the forwarded call —
+    # a stuck startup previously hung unbounded and wedged the gateway lock.
+    monkeypatch.setenv(gateway.SERENA_CONNECT_TIMEOUT_ENV, "0.5")
+    gw = _fake_gateway(repo)
+    monkeypatch.setattr(gw, "_ensure_client", _HangingConnect)
+    try:
+        with pytest.raises(TimeoutError, match="connect timed out"):
+            await gw.call("find_symbol", {"name_path": "x"})
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_recovers_after_connect_timeout(repo, monkeypatch):
+    # After a connect timeout the half-opened client is discarded, so the next call must
+    # respawn a fresh session and succeed rather than staying wedged. The first connect gets a
+    # tight 0.5s budget (fires on the hanging client); the respawn gets a generous one so the
+    # real subprocess spawn + MCP initialize is not itself throttled.
+    budgets = iter([0.5])
+    monkeypatch.setattr(gateway, "serena_connect_timeout", lambda: next(budgets, 30.0))
+    gw = _fake_gateway(repo)
+    real_ensure = gw._ensure_client
+    calls = {"n": 0}
+
+    def flaky_ensure():
+        calls["n"] += 1
+        return _HangingConnect() if calls["n"] == 1 else real_ensure()
+
+    monkeypatch.setattr(gw, "_ensure_client", flaky_ensure)
+    try:
+        with pytest.raises(TimeoutError, match="connect timed out"):
+            await gw.call("find_symbol", {"name_path": "x"})
+        result = await gw.call("find_symbol", {"name_path": "again"})
+        assert (result.structuredContent or {}).get("echo") == "again"
+    finally:
+        await gw.aclose()
+
+
 @pytest.mark.timeout(30)
 async def test_session_is_reused_across_sequential_calls(repo):
     # The persistent-session fix: sequential calls must reuse one connection, not

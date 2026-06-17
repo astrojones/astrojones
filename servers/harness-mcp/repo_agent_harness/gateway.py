@@ -54,7 +54,13 @@ SERENA_PIN = "2449313c0d7427275c4c66aedff7d4881782f713"
 SERENA_SPEC_ENV = "REPO_AGENT_HARNESS_SERENA_SPEC"
 SERENA_CMD_ENV = "REPO_AGENT_HARNESS_SERENA_CMD"
 SERENA_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_TIMEOUT"
+SERENA_CONNECT_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_CONNECT_TIMEOUT"
 _DEFAULT_SERENA_TIMEOUT = 60.0
+# Connecting spawns Serena and boots one language server per seeded language
+# (see context.serena_languages) — a cold multi-LSP startup far slower than a steady-state
+# call, so it gets its own, more generous budget. Without bounding it the first call's connect
+# was unbounded and could hang until the agent was killed.
+_DEFAULT_SERENA_CONNECT_TIMEOUT = 120.0
 TOOL_PREFIX = "serena_"
 _SNAPSHOT_NAME = "serena_tools.json"
 
@@ -67,23 +73,35 @@ def serena_spec() -> str:
     return os.environ.get(SERENA_SPEC_ENV) or f"git+https://github.com/oraios/serena@{SERENA_PIN}"
 
 
-def serena_timeout() -> float:
-    """Return the per-call Serena timeout in seconds (env-overridable).
+def _positive_float_env(name: str, default: float) -> float:
+    """Return a positive float from env ``name``, falling back to ``default``.
 
-    Read at call time so tests can override it via the environment. A non-positive
-    or unparseable override falls back to the default rather than failing the call.
-
-    Returns:
-        The timeout in seconds; the default when unset, empty, invalid, or <= 0.
+    Read at call time so tests can override it via the environment. A non-positive,
+    empty, or unparseable value falls back to the default rather than failing the call.
     """
-    raw = os.environ.get(SERENA_TIMEOUT_ENV)
+    raw = os.environ.get(name)
     if not raw:
-        return _DEFAULT_SERENA_TIMEOUT
+        return default
     try:
         value = float(raw)
     except ValueError:
-        return _DEFAULT_SERENA_TIMEOUT
-    return value if value > 0 else _DEFAULT_SERENA_TIMEOUT
+        return default
+    return value if value > 0 else default
+
+
+def serena_timeout() -> float:
+    """Return the per-call Serena timeout in seconds (env-overridable)."""
+    return _positive_float_env(SERENA_TIMEOUT_ENV, _DEFAULT_SERENA_TIMEOUT)
+
+
+def serena_connect_timeout() -> float:
+    """Return the session connect/startup timeout in seconds (env-overridable).
+
+    Bounds the one-time spawn + MCP ``initialize`` + language-server boot in
+    :meth:`SerenaGateway._open_locked`; more generous than :func:`serena_timeout`
+    because a cold multi-LSP start is slow.
+    """
+    return _positive_float_env(SERENA_CONNECT_TIMEOUT_ENV, _DEFAULT_SERENA_CONNECT_TIMEOUT)
 
 
 def serena_args(root: str) -> list[str]:
@@ -244,12 +262,26 @@ class SerenaGateway:
             return client
 
     async def _open_locked(self) -> Client:
-        """Discard any dead client, then build and connect a fresh one. Caller holds the lock."""
+        """Discard any dead client, then build and connect a fresh one. Caller holds the lock.
+
+        The connect (spawn + MCP ``initialize`` + language-server boot) is bounded by
+        :func:`serena_connect_timeout`; without it a slow/stuck startup could hang
+        unbounded and, since the caller holds the lock, wedge every other ``serena_*`` call.
+        On timeout the half-opened client is discarded so the next call respawns cleanly
+        (fastmcp reaps the spawned child on the cancellation that ``fail_after`` raises).
+        """
         await self._discard_locked()
         client = self._ensure_client()
         # Persistent session: enter the context once and keep it open across calls (closed in
         # _discard_locked), so we deliberately call the dunder instead of ``async with``.
-        await client.__aenter__()  # noqa: PLC2801
+        budget = serena_connect_timeout()
+        try:
+            with anyio.fail_after(budget):
+                await client.__aenter__()  # noqa: PLC2801
+        except TimeoutError:
+            await self._discard_locked()
+            msg = f"serena connect timed out after {budget}s"
+            raise TimeoutError(msg) from None
         return client
 
     async def _discard_locked(self) -> None:
