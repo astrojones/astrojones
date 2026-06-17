@@ -106,6 +106,32 @@ async def test_recovers_after_timeout(repo, monkeypatch):
 
 
 @pytest.mark.timeout(30)
+async def test_session_is_reused_across_sequential_calls(repo):
+    # The persistent-session fix: sequential calls must reuse one connection, not
+    # tear it down and re-init per call (the old per-call ``async with`` regression).
+    gw = _fake_gateway(repo)
+    try:
+        first = await gw.call("find_symbol", {"name_path": "a"})
+        client_after_first = gw._client
+        assert client_after_first is not None
+        assert client_after_first.is_connected()
+        second = await gw.call("find_symbol", {"name_path": "b"})
+        assert gw._client is client_after_first, "session was rebuilt between sequential calls"
+        assert (first.structuredContent or {}).get("echo") == "a"
+        assert (second.structuredContent or {}).get("echo") == "b"
+    finally:
+        await gw.aclose()
+
+
+async def test_aclose_disconnects_the_session(repo):
+    gw = _fake_gateway(repo)
+    await gw.call("find_symbol", {"name_path": "x"})
+    assert gw._client is not None and gw._client.is_connected()
+    await gw.aclose()
+    assert gw._client is None
+
+
+@pytest.mark.timeout(30)
 async def test_concurrent_calls_share_session(repo):
     gw = _fake_gateway(repo)
     results: dict[int, str] = {}
@@ -135,6 +161,65 @@ async def test_proxied_tool_run_maps_result(repo):
 
 
 # ------------------------------------------------------------------------- health glue
+
+
+@pytest.mark.parametrize(
+    ("cmdline", "expected"),
+    [
+        pytest.param([], False, id="empty"),
+        pytest.param(["py", "serena", "start-mcp-server", "--project-from-cwd"], False, id="uvx-no-project"),
+        pytest.param(
+            ["py", "/v3.2.0/bin/serena", "start-mcp-server", "--project", "/repo"],
+            True,
+            id="other-version-same-repo",
+        ),
+        pytest.param(["py", "/cur/bin/serena", "start-mcp-server", "--project", "/repo"], False, id="our-version"),
+        pytest.param(["py", "/v3.2.0/bin/serena", "start-mcp-server", "--project", "/other"], False, id="other-repo"),
+        pytest.param(["py", "/v3.2.0/bin/serena", "start-mcp-server", "--project"], False, id="dangling-project"),
+    ],
+)
+def test_is_stale_serena_child_selection(cmdline, expected):
+    assert gateway._is_stale_serena_child(cmdline, "/cur/bin/serena", "/repo") is expected
+
+
+def test_reap_kills_only_other_version_same_repo(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway, "serena_command", lambda: "/cur/bin/serena")
+    root = str(tmp_path)
+    root_resolved = str(Path(root).resolve())
+    killed: list[int] = []
+
+    class FakeProc:
+        def __init__(self, pid: int, cmdline: list[str]) -> None:
+            self.pid = pid
+            self.info = {"pid": pid, "cmdline": cmdline}
+
+        def terminate(self) -> None:
+            killed.append(self.pid)
+
+        def kill(self) -> None:  # pragma: no cover - wait_procs reports none alive
+            killed.append(self.pid)
+
+    procs = [
+        FakeProc(111, ["py", "/v3.2.0/bin/serena", "start-mcp-server", "--project", root_resolved]),
+        FakeProc(222, ["py", "/cur/bin/serena", "start-mcp-server", "--project", root_resolved]),
+        FakeProc(333, ["py", "/v3.2.0/bin/serena", "start-mcp-server", "--project", "/elsewhere"]),
+        FakeProc(444, ["uvx", "serena", "start-mcp-server", "--project-from-cwd"]),
+    ]
+    fake_psutil = SimpleNamespace(
+        Error=Exception,
+        process_iter=lambda attrs=None: procs,
+        wait_procs=lambda victims, timeout=None: ([], []),
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    reaped = gateway.reap_stale_serena_children(root)
+    assert reaped == [111]
+    assert killed == [111]
+
+
+def test_reap_noop_for_bare_path_command(monkeypatch):
+    monkeypatch.setattr(gateway, "serena_command", lambda: "serena")
+    assert gateway.reap_stale_serena_children("/repo") == []
 
 
 def test_diagnostics_check_counts_from_fake_result(repo):

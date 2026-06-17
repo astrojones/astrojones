@@ -67,6 +67,8 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     """
     _ = app
     root = git.repo_root()
+    with suppress(Exception):  # best-effort: never let process cleanup block startup
+        gateway.reap_stale_serena_children(root)  # kill orphaned Serena children from prior versions
     _autoseed_onboarding(root)  # one-time, best-effort: onboard the repo before the agent acts
     # a plain task, not a task group: the lifespan generator's yield must not sit
     # inside a cancel scope, or cancelled shutdown exits scopes in the wrong task

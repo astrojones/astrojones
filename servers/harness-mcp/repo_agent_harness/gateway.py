@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextlib import suppress
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,6 +45,7 @@ from pydantic import PrivateAttr
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import psutil
     from mcp import types
 
 SERENA_PIN = "2449313c0d7427275c4c66aedff7d4881782f713"
@@ -111,6 +113,77 @@ def serena_command() -> str:
     return str(candidate) if candidate.exists() else "serena"
 
 
+def _is_stale_serena_child(cmdline: list[str], ours: str, root_resolved: str) -> bool:
+    """True when ``cmdline`` is a Serena child for *this* repo launched by a *different* harness.
+
+    Matches ``start-mcp-server --project <root>`` whose launching executable is not ``ours`` (the
+    current venv's serena script). Same project + different binary ⇒ an orphan left by a prior
+    plugin-cache version: ``keep_alive`` children outlive a SIGKILLed parent on upgrade. Excludes
+    the user-level ``uvx ... --project-from-cwd`` Serena (it carries no ``--project``) and the
+    current version's own child (``ours`` appears in its argv).
+    """
+    if "start-mcp-server" not in cmdline or "--project" not in cmdline:
+        return False
+    idx = cmdline.index("--project")
+    if idx + 1 >= len(cmdline):
+        return False
+    proj = cmdline[idx + 1]
+    try:
+        same_project = str(Path(proj).resolve()) == root_resolved
+    except OSError:
+        same_project = proj == root_resolved
+    return same_project and ours not in cmdline
+
+
+def reap_stale_serena_children(root: str | None) -> list[int]:
+    """Kill orphaned Serena children for this repo left behind by a previous harness version.
+
+    Best-effort and deliberately narrow: only terminates processes whose ``--project`` is this
+    repo and whose launcher is not the current version's serena. Never touches another project's
+    Serena or the current child. Returns the reaped PIDs. A no-op when the serena command is a
+    bare PATH name (versions are then indistinguishable) or psutil is unavailable.
+    """
+    if root is None:
+        return []
+    ours = serena_command()
+    if os.sep not in ours:  # bare "serena" on PATH: can't tell versions apart — do nothing
+        return []
+    try:
+        import psutil
+    except ImportError:
+        return []
+    try:
+        root_resolved = str(Path(root).resolve())
+    except OSError:
+        root_resolved = root
+    victims = _stale_serena_procs(ours, root_resolved)
+    for proc in victims:
+        with suppress(psutil.Error):
+            proc.terminate()
+    _gone, alive = psutil.wait_procs(victims, timeout=2)
+    for proc in alive:
+        with suppress(psutil.Error):
+            proc.kill()
+    return [proc.pid for proc in victims]
+
+
+def _stale_serena_procs(ours: str, root_resolved: str) -> list[psutil.Process]:
+    """Return the live Serena children that are stale for this repo (skipping the current process)."""
+    import psutil
+
+    me = os.getpid()
+    victims: list[psutil.Process] = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        if proc.pid == me:
+            continue
+        try:
+            if _is_stale_serena_child(proc.info["cmdline"] or [], ours, root_resolved):
+                victims.append(proc)
+        except (psutil.Error, OSError):
+            continue
+    return victims
+
+
 class SerenaGateway:
     """Lazy, crash-tolerant MCP client owning the child Serena process for one repo.
 
@@ -133,6 +206,7 @@ class SerenaGateway:
         self._root_spec = root
         self._injected_transport = transport
         self._client: Client | None = None
+        self._lock = anyio.Lock()
         self.root: str | None = root if isinstance(root, str) else None
 
     def _ensure_client(self) -> Client:
@@ -152,23 +226,63 @@ class SerenaGateway:
             self._client = Client(transport)
         return self._client
 
+    async def _connected_client(self) -> Client:
+        """Return a live client, opening the session once and reusing it across calls.
+
+        The session (and the child Serena plus its language servers) is entered a single
+        time and held open for the gateway's lifetime, so sequential ``serena_*`` calls
+        skip the per-call MCP ``initialize`` handshake that the old per-call ``async with``
+        paid every time. A dead session (crash, or teardown after a timeout) is detected
+        via ``is_connected()`` and transparently respawned on the next call.
+        """
+        async with self._lock:
+            client = self._client
+            if client is None or not client.is_connected():
+                client = await self._open_locked()
+            return client
+
+    async def _open_locked(self) -> Client:
+        """Discard any dead client, then build and connect a fresh one. Caller holds the lock."""
+        await self._discard_locked()
+        client = self._ensure_client()
+        # Persistent session: enter the context once and keep it open across calls (closed in
+        # _discard_locked), so we deliberately call the dunder instead of ``async with``.
+        await client.__aenter__()  # noqa: PLC2801
+        return client
+
+    async def _discard_locked(self) -> None:
+        """Tear down the current client so the next call reconnects cleanly. Caller holds the lock."""
+        old, self._client = self._client, None
+        if old is not None:
+            with suppress(Exception):
+                await old.close()
+
+    async def _invalidate(self) -> None:
+        """Drop a failed session so the next call respawns Serena (crash/timeout recovery)."""
+        async with self._lock:
+            await self._discard_locked()
+
     async def call(self, name: str, arguments: dict) -> types.CallToolResult:
-        """Forward one tool call to Serena (launches the child on first use).
+        """Forward one tool call to Serena over the persistent session (launched on first use).
 
         The forwarded call is bounded by :func:`serena_timeout` so a hung or slow
-        language-server call cannot block the harness indefinitely.
+        language-server call cannot block the harness indefinitely; on timeout or transport
+        failure the session is invalidated so the next call reconnects a fresh child.
 
         Raises:
             TimeoutError: If Serena does not respond within the timeout.
         """
-        client = self._ensure_client()
-        async with client:
-            try:
-                with anyio.fail_after(serena_timeout()):
-                    return await client.call_tool_mcp(name, arguments)
-            except TimeoutError:
-                msg = f"serena call {name!r} timed out after {serena_timeout()}s"
-                raise TimeoutError(msg) from None
+        client = await self._connected_client()
+        try:
+            with anyio.fail_after(serena_timeout()):
+                return await client.call_tool_mcp(name, arguments)
+        except TimeoutError:
+            await self._invalidate()
+            msg = f"serena call {name!r} timed out after {serena_timeout()}s"
+            raise TimeoutError(msg) from None
+        except BaseException:
+            await self._invalidate()
+            raise
 
     def call_from_thread(self, name: str, arguments: dict) -> types.CallToolResult:
         """Sync facade for callers running in a worker thread (e.g. health checks)."""
@@ -182,8 +296,8 @@ class SerenaGateway:
 
     async def aclose(self) -> None:
         """Terminate the child process, if one was ever started."""
-        if self._client is not None:
-            await self._client.close()
+        async with self._lock:
+            await self._discard_locked()
 
 
 class _ProxiedSerenaTool(Tool):
