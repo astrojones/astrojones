@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from repo_agent_harness import git, policies, shell
+from repo_agent_harness import detect, git, policies, shell
 from repo_agent_harness import secrets as _secrets
 
 LANG_BY_EXT = {
@@ -59,14 +59,19 @@ KNOWN_TOOLS = [
     "uv",
     "python3",
     "ruff",
+    "ty",
     "eslint",
+    "biome",
     "pytest",
+    "vitest",
     "mypy",
     "pyright",
     "tsc",
     "npm",
     "pnpm",
     "yarn",
+    "deno",
+    "bun",
     "go",
     "cargo",
 ]
@@ -167,6 +172,7 @@ def overview(root: str) -> dict:
         "entrypoints": manifest.get("entrypoints") or entrypoints,
         "important_paths": manifest.get("important_paths") or _top_level_dirs(rootp),
         "available_tools": available,
+        "configured_tools": detect.configured_tools(root),
         "harness": _harness_summary(rootp),
     }
 

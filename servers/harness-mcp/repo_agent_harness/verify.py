@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-from repo_agent_harness import git, shell
+from repo_agent_harness import detect, git, shell
 
 
 def _changed_by_ext(root: str, exts: set[str]) -> list[str]:
@@ -51,35 +51,91 @@ def _result(res: shell.Result, command: str) -> dict:
     return {"ok": res.ok, "skipped": False, "command": command, "output": (res.stdout or res.stderr).strip()}
 
 
+def _group_by_config(root: str, files: list[str]) -> dict[Path, list[str]]:
+    """Group changed files by the directory of their governing ``pyproject.toml``.
+
+    Files whose governing config is at ``root`` (or that have none) fall into the
+    ``root`` group, so single-package repos collapse to one group with paths kept
+    relative to root (no behavior change).
+    """
+    groups: dict[Path, list[str]] = {}
+    rootp = Path(root)
+    for f in files:
+        pp = detect._governing_pyproject(root, [f])
+        config_dir = pp.parent if pp else rootp
+        groups.setdefault(config_dir, []).append(f)
+    return groups
+
+
+def _run_grouped(root: str, files: list[str], select, timeout: int) -> dict | None:
+    """Run a detected command per governing-config group; merge into one ``_result``.
+
+    ``select(config_dir, group_files)`` (a ``detect`` selector) returns a command
+    descriptor (``{"label", "argv"}``) or ``None``. If it returns ``None`` for any
+    group, this returns ``None`` to signal the caller to use its which-race fallback.
+    Otherwise each group runs with ``cwd`` at its governing config directory and file
+    paths relativized to it; results merge as ``ok=all(ok)`` with commands/outputs
+    joined.
+    """
+    rootp = Path(root)
+    commands: list[str] = []
+    outputs: list[str] = []
+    ok = True
+    for config_dir, group in sorted(_group_by_config(root, files).items()):
+        rel = [str((rootp / f).relative_to(config_dir)) for f in group]
+        cmd = select(str(config_dir), rel)
+        if cmd is None:
+            return None
+        res = shell.run([*cmd["argv"], *rel], cwd=str(config_dir), timeout=timeout, max_chars=4000)
+        ok = ok and res.ok
+        commands.append(cmd["label"] + " " + " ".join(rel))
+        outputs.append((res.stdout or res.stderr).strip())
+    return {"ok": ok, "skipped": False, "command": " ; ".join(commands), "output": "\n".join(outputs).strip()}
+
+
 def lint_changed(root: str) -> dict:
-    """Run ruff (Python) or eslint (JS/TS) against changed files only."""
+    """Lint changed files with the repo's configured linter, else the which-race fallback."""
     py = _changed_by_ext(root, {".py"})
-    if py and shell.which("ruff"):
-        return _result(
-            shell.run(["ruff", "check", *py], cwd=root, timeout=120, max_chars=4000), "ruff check " + " ".join(py)
-        )
+    if py:
+        detected = _run_grouped(root, py, detect.python_linter, 120)
+        if detected is not None:
+            return detected
+        if shell.which("ruff"):
+            return _result(
+                shell.run(["ruff", "check", *py], cwd=root, timeout=120, max_chars=4000), "ruff check " + " ".join(py)
+            )
     web = _changed_by_ext(root, {".js", ".jsx", ".ts", ".tsx"})
-    if web and shell.which("npx"):
-        return _result(
-            shell.run(["npx", "--no-install", "eslint", *web], cwd=root, timeout=120, max_chars=4000),
-            "npx eslint " + " ".join(web),
-        )
+    if web:
+        detected = _run_grouped(root, web, detect.js_linter, 120)
+        if detected is not None:
+            return detected
+        if shell.which("npx"):
+            return _result(
+                shell.run(["npx", "--no-install", "eslint", *web], cwd=root, timeout=120, max_chars=4000),
+                "npx eslint " + " ".join(web),
+            )
     return _skip("no lintable changed files or no linter available")
 
 
 def typecheck_changed(root: str) -> dict:
-    """Run mypy, pyright, or tsc against changed files only."""
+    """Type-check changed files with the repo's configured checker, else the which-race fallback."""
     py = _changed_by_ext(root, {".py"})
-    if py and shell.which("mypy"):
-        return _result(shell.run(["mypy", *py], cwd=root, timeout=180, max_chars=4000), "mypy " + " ".join(py))
-    if py and shell.which("pyright"):
-        return _result(shell.run(["pyright", *py], cwd=root, timeout=180, max_chars=4000), "pyright " + " ".join(py))
+    if py:
+        detected = _run_grouped(root, py, detect.python_typechecker, 180)
+        if detected is not None:
+            return detected
+        if shell.which("mypy"):
+            return _result(shell.run(["mypy", *py], cwd=root, timeout=180, max_chars=4000), "mypy " + " ".join(py))
+        if shell.which("pyright"):
+            return _result(
+                shell.run(["pyright", *py], cwd=root, timeout=180, max_chars=4000), "pyright " + " ".join(py)
+            )
     web = _changed_by_ext(root, {".ts", ".tsx"})
-    if web and (Path(root) / "tsconfig.json").is_file() and shell.which("npx"):
-        return _result(
-            shell.run(["npx", "--no-install", "tsc", "--noEmit"], cwd=root, timeout=180, max_chars=4000),
-            "npx tsc --noEmit",
-        )
+    if web:
+        cmd = detect.js_typechecker(root, web)
+        if cmd is not None:
+            # tsc is whole-project: passing explicit files would bypass tsconfig.json, so don't append `web`.
+            return _result(shell.run([*cmd["argv"]], cwd=root, timeout=180, max_chars=4000), cmd["label"])
     return _skip("no typecheckable changed files or no type checker available")
 
 
@@ -91,10 +147,13 @@ def _pytest_cmd() -> list[str]:
 
 
 def test_changed(root: str) -> dict:
-    """Run pytest against the test files corresponding to changed source files."""
+    """Run the changed-file tests with the repo's configured runner, else the fallback."""
     py = _changed_by_ext(root, {".py"})
     tests = _tests_for(root, py)
     if tests:
+        detected = _run_grouped(root, tests, detect.python_test, 300)
+        if detected is not None:
+            return detected
         cmd = [*_pytest_cmd(), "-q", *tests]
         return _result(
             shell.run(cmd, cwd=root, timeout=300, max_chars=6000), " ".join(cmd[: -len(tests)]) + " " + " ".join(tests)

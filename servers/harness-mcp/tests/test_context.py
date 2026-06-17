@@ -9,6 +9,20 @@ def test_overview(repo):
     assert any("pyproject" in p for p in ov["package_managers"])
 
 
+def test_overview_configured_tools_present(repo):
+    ov = context.overview(str(repo))
+    assert "configured_tools" in ov
+    assert isinstance(ov["configured_tools"], dict)
+
+
+def test_overview_configured_tools_reads_pyproject(repo):
+    (repo / "pyproject.toml").write_text(
+        "[project]\nname='x'\n[tool.ty.rules]\n[tool.ruff]\n[tool.pytest.ini_options]\n"
+    )
+    ov = context.overview(str(repo))
+    assert ov["configured_tools"] == {"typecheck": "ty", "lint": "ruff", "test": "pytest"}
+
+
 def test_overview_harness_absent(repo):
     """A bare repo is not harnessed and surfaces no harness inventory."""
     h = context.overview(str(repo))["harness"]

@@ -5,7 +5,7 @@ version: 1
 checks:
   - id: lint # changed-file lint via the detected linter (ruff/eslint)
     kind: lint
-  - id: typecheck # changed-file type check (mypy/pyright/tsc)
+  - id: typecheck # changed-file type check via the repo's configured type checker
     kind: typecheck
   - id: tests # tests mapped to changed files (pytest)
     kind: test
