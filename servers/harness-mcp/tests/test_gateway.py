@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import anyio
 import pytest
 from fastmcp.client.transports import StdioTransport
-from repo_agent_harness import gateway, health
+from repo_agent_harness import gateway, health, serena_gate
 
 pytestmark = pytest.mark.anyio
 
@@ -156,6 +156,60 @@ async def test_proxied_tool_run_maps_result(repo):
         tool_result = await tool.run({"name_path": "x"})
         assert tool_result.is_error is False
         assert (tool_result.structured_content or {}).get("echo") == "x"
+    finally:
+        await gw.aclose()
+
+
+# --------------------------------------------------------------------------- capability gate
+
+
+def test_implementation_capability_predicate():
+    # Python is refused (Pyright does not implement textDocument/implementation); message redirects.
+    msg = serena_gate.implementation_unsupported("src/payment.py")
+    assert msg and "find_referencing_symbols" in msg
+    # Languages whose LSP implements the method pass (None == no refusal).
+    assert serena_gate.implementation_unsupported("app/main.ts") is None
+    assert serena_gate.implementation_unsupported("pkg/server.go") is None
+    assert serena_gate.implementation_unsupported("src/lib.rs") is None
+    # Empty / extensionless paths defer to Serena's own argument validation.
+    assert serena_gate.implementation_unsupported("") is None
+    assert serena_gate.implementation_unsupported("Makefile") is None
+    # Only find_implementations is gated.
+    assert serena_gate.capability_gate_for("find_implementations") is not None
+    assert serena_gate.capability_gate_for("find_symbol") is None
+
+
+async def test_find_implementations_refused_for_python_without_connecting():
+    # A gateway whose command cannot exist: a working gate returns the refusal WITHOUT launching
+    # the (nonexistent) child. Failing to gate would instead attempt to connect and raise.
+    transport = StdioTransport(command="/nonexistent/serena", args=[], cwd=".", keep_alive=True)
+    gw = gateway.SerenaGateway(".", transport=transport)
+    tool = next(t for t in gateway.proxied_tools(gw) if t.name == "serena_find_implementations")
+    result = await tool.run({"name_path": "X", "relative_path": "src/payment.py"})
+    assert result.is_error is True
+    assert "textDocument/implementation" in result.content[0].text
+
+
+async def test_find_implementations_forwards_for_capable_language(repo):
+    gw = _fake_gateway(repo)
+    try:
+        tool = next(t for t in gateway.proxied_tools(gw) if t.name == "serena_find_implementations")
+        result = await tool.run({"name_path": "X", "relative_path": "app/main.ts"})
+        assert result.is_error is False
+        assert (result.structured_content or {}).get("echo") == "X"
+    finally:
+        await gw.aclose()
+
+
+async def test_capability_gate_honors_disable_env(repo, monkeypatch):
+    # With the gate disabled, even a Python target forwards to Serena (no refusal).
+    monkeypatch.setenv(serena_gate.GATE_ENV, "1")
+    gw = _fake_gateway(repo)
+    try:
+        tool = next(t for t in gateway.proxied_tools(gw) if t.name == "serena_find_implementations")
+        result = await tool.run({"name_path": "X", "relative_path": "src/payment.py"})
+        assert result.is_error is False
+        assert (result.structured_content or {}).get("echo") == "X"
     finally:
         await gw.aclose()
 

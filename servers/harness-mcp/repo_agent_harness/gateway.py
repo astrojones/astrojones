@@ -40,13 +40,15 @@ from anyio import from_thread
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from fastmcp.tools import Tool, ToolResult
+from mcp import types
 from pydantic import PrivateAttr
+
+from repo_agent_harness import serena_gate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     import psutil
-    from mcp import types
 
 SERENA_PIN = "2449313c0d7427275c4c66aedff7d4881782f713"
 SERENA_SPEC_ENV = "REPO_AGENT_HARNESS_SERENA_SPEC"
@@ -306,8 +308,19 @@ class _ProxiedSerenaTool(Tool):
     _gateway: SerenaGateway = PrivateAttr()
 
     async def run(self, arguments: dict) -> ToolResult:
-        """Forward to Serena and map the raw CallToolResult 1:1 (content, structured, is_error)."""
-        result = await self._gateway.call(self.name.removeprefix(TOOL_PREFIX), arguments)
+        """Forward to Serena and map the raw CallToolResult 1:1 (content, structured, is_error).
+
+        First consult the per-file capability gate: a tool whose underlying LSP method is
+        unsupported for the target file's language (e.g. find_implementations on Python, which
+        Pyright does not implement) is refused here — before connecting — with a redirect message.
+        """
+        bare = self.name.removeprefix(TOOL_PREFIX)
+        gate = serena_gate.capability_gate_for(bare)
+        if gate is not None and not serena_gate.gate_disabled():
+            refusal = gate(arguments.get("relative_path", ""))
+            if refusal is not None:
+                return ToolResult(content=[types.TextContent(type="text", text=refusal)], is_error=True)
+        result = await self._gateway.call(bare, arguments)
         return ToolResult(
             content=result.content,
             structured_content=result.structuredContent,

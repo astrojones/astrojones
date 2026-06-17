@@ -15,6 +15,12 @@ def find_symbol(name_path: str) -> dict:
 
 
 @mcp.tool()
+def find_implementations(name_path: str, relative_path: str) -> dict:
+    """Echo the requested symbol path (exercises the capable-language forward path in tests)."""
+    return {"echo": name_path, "result": name_path}
+
+
+@mcp.tool()
 def get_diagnostics_for_file(relative_path: str) -> dict:
     """Return canned grouped diagnostics: 1 error, 2 warnings."""
     return {
