@@ -148,7 +148,7 @@ def _harness_summary(rootp: Path) -> dict:
 
 
 def overview(root: str) -> dict:
-    """Summarize the repo: languages, package managers, entrypoints, important paths, available tools."""
+    """Summarize the repo: languages, package managers, entrypoints, important paths, configured tools."""
     files = git.list_files(root)
     counts: dict[str, int] = {}
     for f in files:
@@ -160,7 +160,7 @@ def overview(root: str) -> dict:
     rootp = Path(root)
     pkgs = [name for marker, name in PKG_MANAGERS.items() if (rootp / marker).is_file()]
     entrypoints = [c for c in ENTRYPOINT_CANDIDATES if (rootp / c).exists()]
-    available = [t for t in KNOWN_TOOLS if shell.which(t)]
+    configured = detect.configured_tools(root)
     manifest = _read_manifest(root)
 
     return {
@@ -171,8 +171,8 @@ def overview(root: str) -> dict:
         "package_managers": pkgs,
         "entrypoints": manifest.get("entrypoints") or entrypoints,
         "important_paths": manifest.get("important_paths") or _top_level_dirs(rootp),
-        "available_tools": available,
-        "configured_tools": detect.configured_tools(root),
+        "available_tools": list(configured.values()),
+        "configured_tools": configured,
         "harness": _harness_summary(rootp),
     }
 
