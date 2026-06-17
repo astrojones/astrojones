@@ -7,7 +7,7 @@ name = "repo-agent-harness"
 version = "3.7.2"
 description = "Deterministic, safe, repo-aware tools for coding agents (MCP server + CLI)."
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.13,<3.15"
 license = { text = "MIT" }
 authors = [{ name = "Jona Heidsick" }]
 classifiers = [
@@ -50,7 +50,7 @@ packages = ["repo_agent_harness"]
 # ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py313"
 src = ["repo_agent_harness", "tests"]
 exclude = [".git", ".venv", "build", "dist", "__pycache__"]
 
