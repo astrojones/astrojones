@@ -16,6 +16,7 @@ transport death. Each test carries a hard ``timeout`` so a regression fails loud
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -171,5 +172,64 @@ async def test_intermittent_timeouts_do_not_disturb_concurrent_healthy_calls(rep
             await asyncio.gather(timer(), *(healthy(t) for t in tags))
 
         assert not failures, f"{len(failures)} healthy calls failed under churn: {failures[:5]}"
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(60)
+async def test_caller_cancelled_during_cold_connect_does_not_storm(repo, monkeypatch):
+    """A caller cancelled during the COLD connect must not respawn the child — no storm.
+
+    The field failure: a serena call cancelled while the gateway was still performing the cold
+    connect (spawn + MCP ``initialize``) let fastmcp force-close the half-open child, so the
+    connect made no progress and the *next* call reconnected from scratch. Under parallel-
+    subagent load that cancelled every connect attempt in turn — each spawning and immediately
+    SIGKILLing a child (a ~30s respawn storm) while the originating call never completed (the
+    35-minute hang). The warm-call cancellation tests above never caught it: the bug is unique
+    to cancellation *before the session exists*.
+
+    With the single-flight, shielded connect a cancelled caller only stops awaiting; the shared
+    connect runs to completion for its siblings and its own retry. So however many callers are
+    cancelled mid-connect, exactly ONE connect happens and a later call succeeds. On the pre-fix
+    gateway the connect count climbs with each cancellation and this fails loudly.
+    """
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "30")  # not exercising the call timeout
+    # A slow cold boot opens a deterministic window to cancel *inside* the connect. The delay
+    # must reach the child, so pass an explicit env (mcp's stdio default env would drop it).
+    transport = StdioTransport(
+        command=sys.executable,
+        args=[str(FAKE)],
+        cwd=str(repo),
+        keep_alive=True,
+        env={**os.environ, "FAKE_SERENA_BOOT_DELAY": "1.5"},
+    )
+    gw = gateway.SerenaGateway(str(repo), transport=transport)
+
+    connects = 0
+    original_open_locked = gw._open_locked
+
+    async def counting_open_locked():
+        nonlocal connects
+        connects += 1
+        return await original_open_locked()
+
+    monkeypatch.setattr(gw, "_open_locked", counting_open_locked)
+
+    try:
+        # Repeatedly begin a cold call and cancel it well inside the 1.5s connect window.
+        for _ in range(4):
+            victim = asyncio.create_task(gw.call("find_symbol", {"name_path": "x"}))
+            await asyncio.sleep(0.3)  # firmly mid cold-connect
+            victim.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await victim
+
+        # The shared connect survived every cancellation; a normal call now succeeds.
+        result = await gw.call("find_symbol", {"name_path": "alive"})
+        assert await _echo(result) == "alive", "shared connect did not survive caller cancellation"
+        assert connects == 1, (
+            f"cold connect respawned {connects - 1}x under caller cancellation — a cancelled connect "
+            "is force-closing the shared child instead of running to completion (the respawn storm)"
+        )
     finally:
         await gw.aclose()

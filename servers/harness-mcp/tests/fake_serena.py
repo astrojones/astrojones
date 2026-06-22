@@ -78,4 +78,9 @@ def wedge() -> str:
 
 
 if __name__ == "__main__":
+    # Optional cold-boot delay: sleeping before run() defers the MCP initialize handshake, so
+    # the gateway's connect blocks long enough to be cancelled mid-flight (connect-storm test).
+    _boot_delay = float(os.environ.get("FAKE_SERENA_BOOT_DELAY", "0") or "0")
+    if _boot_delay:
+        time.sleep(_boot_delay)
     mcp.run()

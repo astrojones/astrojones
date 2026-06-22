@@ -27,6 +27,7 @@ once the working directory / ``CLAUDE_PROJECT_DIR`` is settled.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -235,6 +236,11 @@ class SerenaGateway:
         self._injected_transport = transport
         self._client: Client | None = None
         self._lock = anyio.Lock()
+        # Single-flight cold-connect task, shared by every caller that arrives while a connect
+        # is in flight. Detached from any one caller's cancel scope so a caller cancelled
+        # mid-connect cannot tear the shared, in-progress connect (and its freshly spawned
+        # child) down — that was the parallel-subagent respawn storm.
+        self._connect_task: asyncio.Task[Client] | None = None
         self._consecutive_timeouts = 0
         self.root: str | None = root if isinstance(root, str) else None
 
@@ -263,12 +269,38 @@ class SerenaGateway:
         skip the per-call MCP ``initialize`` handshake that the old per-call ``async with``
         paid every time. A dead session (crash, or teardown after a timeout) is detected
         via ``is_connected()`` and transparently respawned on the next call.
+
+        The cold connect runs as a **single-flight, detached task** awaited through
+        ``asyncio.shield``: concurrent first-callers coalesce onto one connect (no thundering
+        herd of children), and — critically — a caller cancelled mid-connect only stops
+        *awaiting*; the connect itself runs to completion for its siblings and its own retry.
+        Without this a cancelled cold connect let fastmcp force-close the half-open child, so
+        every cancelled attempt spawned and immediately killed a Serena child — the respawn
+        storm that hung parallel subagents.
         """
         async with self._lock:
             client = self._client
-            if client is None or not client.is_connected():
-                client = await self._open_locked()
-            return client
+            if client is not None and client.is_connected():
+                return client
+            task = self._connect_task
+            if task is None or task.done():
+                task = asyncio.ensure_future(self._connect_once())
+                # Retrieve the result even if every awaiter is cancelled, so a failed connect
+                # with no surviving caller never logs "exception was never retrieved".
+                task.add_done_callback(lambda t: t.cancelled() or t.exception())
+                self._connect_task = task
+        return await asyncio.shield(task)
+
+    async def _connect_once(self) -> Client:
+        """Connect (or reconnect) the shared session — the single-flight body.
+
+        Dispatched as a detached task by :meth:`_connected_client` so no individual caller's
+        cancellation can interrupt it. Holds the lock for the connect's duration so it never
+        races a concurrent discard/reap, and is bounded by :func:`serena_connect_timeout`
+        inside :meth:`_open_locked`.
+        """
+        async with self._lock:
+            return await self._open_locked()
 
     async def _open_locked(self) -> Client:
         """Discard any dead client, then build and connect a fresh one. Caller holds the lock.
@@ -379,7 +411,17 @@ class SerenaGateway:
             return await client.list_tools()
 
     async def aclose(self) -> None:
-        """Terminate the child process, if one was ever started."""
+        """Terminate the child process, if one was ever started.
+
+        Cancel any in-flight single-flight connect first — outside the lock, since the connect
+        task holds it — so a connect that would otherwise complete after shutdown cannot
+        orphan a freshly spawned child.
+        """
+        task, self._connect_task = self._connect_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(BaseException):
+                await task
         async with self._lock:
             await self._discard_locked()
 
