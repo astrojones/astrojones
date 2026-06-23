@@ -216,6 +216,21 @@ async def test_proxied_tool_run_maps_result(repo):
         await gw.aclose()
 
 
+async def test_warm_preconnects_in_background(repo):
+    """warm() starts the shared session in the background so the first real call is hot."""
+    gw = _fake_gateway(repo)
+    try:
+        task = gw.warm()
+        assert task is not None
+        await task
+        assert gw._client is not None
+        assert gw._client.is_connected()
+        result = await gw.call("find_symbol", {"name_path": "x"})
+        assert (result.structuredContent or {}).get("echo") == "x"
+    finally:
+        await gw.aclose()
+
+
 # --------------------------------------------------------------------------- capability gate
 
 

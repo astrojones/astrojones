@@ -121,3 +121,23 @@ async def test_parallel_mixed_load_completes(server_with_fake_serena):
         assert len(results) == 24
     finally:
         await srv._serena.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_server_lifespan_pre_warms_serena(server_with_fake_serena):
+    """The server lifespan starts Serena in the background so the first serena_* call is warm."""
+    srv = server_with_fake_serena
+    try:
+        async with Client(srv.mcp) as client:
+            # Wait for the background warmup connect to finish; if it has not started yet
+            # the in-flight task is still exposed on the gateway.
+            task = srv._serena._connect_task
+            if task is not None and not task.done():
+                await task
+            assert srv._serena._client is not None, "Serena session was not warmed during lifespan"
+            assert srv._serena._client.is_connected()
+            result = await client.call_tool("serena_find_symbol", {"name_path": "warm"})
+            assert getattr(result, "is_error", False) is False
+            assert (result.structured_content or {}).get("echo") == "warm"
+    finally:
+        await srv._serena.aclose()

@@ -244,6 +244,18 @@ class SerenaGateway:
         self._consecutive_timeouts = 0
         self.root: str | None = root if isinstance(root, str) else None
 
+    def warm(self) -> asyncio.Task[Client]:
+        """Eagerly start the shared Serena session in the background.
+
+        Tool calls that arrive while the connect is in flight coalesce onto the
+        same single-flight connect, so pre-warming during server startup removes
+        the user-visible cold-boot pause from the first ``serena_*`` call.
+        """
+        task = asyncio.ensure_future(self._connected_client())
+        # Suppress "exception was never retrieved" if the task fails before any caller awaits it.
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return task
+
     def _ensure_client(self) -> Client:
         """Build the client once, resolving the repo root lazily on first use."""
         if self._client is None:

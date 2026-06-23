@@ -76,9 +76,16 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     # inside a cancel scope, or cancelled shutdown exits scopes in the wrong task
     repo_watcher = watcher.RepoWatcher(root, lambda paths: health.invalidate(root, paths)) if root else None
     watch_task = asyncio.create_task(repo_watcher.run()) if repo_watcher else None
+    # Pre-warm the Serena session in the background so the first code-navigation call
+    # does not pay the full cold-boot (spawn + LSP start) cost while the UI waits.
+    warm_task = _serena.warm() if root else None
     try:
         yield {}
     finally:
+        if warm_task is not None:
+            warm_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await warm_task
         if repo_watcher is not None:
             repo_watcher.stop()
         if watch_task is not None:
