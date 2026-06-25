@@ -20,7 +20,10 @@ import os
 import sys
 from pathlib import Path
 
+import anyio
+import psutil
 import pytest
+from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from repo_agent_harness import gateway
 
@@ -131,6 +134,53 @@ async def test_wedged_child_recovers_after_consecutive_timeouts(repo, monkeypatc
         # The consecutive timeouts reaped the wedged child; the next call respawns a fresh one.
         result = await gw.call("find_symbol", {"name_path": "recovered"})
         assert await _echo(result) == "recovered", "wedged child was never respawned — recovery lost"
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_mid_request_wedge_is_hard_killed(repo, monkeypatch):
+    """A child whose stdio read ignores the cooperative timeout is hard-killed on the hard deadline.
+
+    Reproduces the issue #30 production defect: when the child wedges *mid-request* the fastmcp
+    stdio read never observes the ``anyio.fail_after`` cancellation, so the cooperative per-call
+    timeout cannot unwind the await and the agent hangs forever — the ``_reap_if_wedged`` recovery
+    is unreachable. The read is made cancellation-deaf here by an inner shielded cancel scope,
+    exactly that failure mode. The out-of-band watchdog must fire at ``serena_hard_deadline()``
+    (= per-call timeout + grace), force-kill the child's *process group* from the outside —
+    closing its stdout so the blocked read finally errors out — and let the gateway reap and
+    respawn. Without the watchdog the call hangs and the ``@pytest.mark.timeout`` fails it.
+    """
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "0.5")
+    monkeypatch.setenv(gateway.SERENA_HARD_DEADLINE_ENV, "0.5")  # hard deadline = 0.5 + 0.5 = 1.0s
+    gw = _fake_gateway(repo)
+    try:
+        # Warm the shared child and capture the PID the gateway discovered out-of-band at connect.
+        assert await _echo(await gw.call("find_symbol", {"name_path": "warm"})) == "warm"
+        pid = gw._child_pid
+        assert pid is not None and psutil.pid_exists(pid), "child PID was not captured at connect"
+
+        # Make the forwarded read deaf to cancellation: an inner shielded scope swallows the 0.5s
+        # cooperative timeout, so only an external kill can free the await — the production wedge.
+        real_call = Client.call_tool_mcp
+
+        async def cancellation_deaf(self, name, arguments):
+            with anyio.CancelScope(shield=True):
+                return await real_call(self, name, arguments)
+
+        monkeypatch.setattr(Client, "call_tool_mcp", cancellation_deaf)
+
+        await gw.call("wedge", {})  # flips the child's wedge flag (this call still returns fast)
+        with pytest.raises(TimeoutError):
+            # find_symbol now blocks forever in the child; the shielded read ignores fail_after;
+            # the watchdog hard-kills at 1.0s, the read errors out, dispatch unwinds as TimeoutError.
+            await gw.call("find_symbol", {"name_path": "wedged"})
+
+        assert not psutil.pid_exists(pid), "watchdog did not hard-kill the wedged child's process group"
+
+        # A cancellable read again: the gateway must respawn a fresh, healthy child and answer.
+        monkeypatch.setattr(Client, "call_tool_mcp", real_call)
+        assert await _echo(await gw.call("find_symbol", {"name_path": "recovered"})) == "recovered"
     finally:
         await gw.aclose()
 

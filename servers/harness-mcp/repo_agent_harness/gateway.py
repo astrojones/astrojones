@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
-from anyio import from_thread
+from anyio import from_thread, to_thread
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from fastmcp.tools import Tool, ToolResult
@@ -61,6 +61,7 @@ SERENA_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_TIMEOUT"
 SERENA_CONNECT_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_CONNECT_TIMEOUT"
 SERENA_CLOSE_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_CLOSE_TIMEOUT"
 SERENA_DISPATCH_TIMEOUT_ENV = "REPO_AGENT_HARNESS_SERENA_DISPATCH_TIMEOUT"
+SERENA_HARD_DEADLINE_ENV = "REPO_AGENT_HARNESS_SERENA_HARD_DEADLINE"
 _DEFAULT_SERENA_TIMEOUT = 60.0
 # Connecting spawns Serena and boots one language server per seeded language
 # (see context.serena_languages) — a cold multi-LSP startup far slower than a steady-state
@@ -72,6 +73,13 @@ _DEFAULT_SERENA_CONNECT_TIMEOUT = 120.0
 # and every concurrent caller hangs at ``async with self._lock``. Generous enough that a healthy
 # close is never cut short; a timed-out close is abandoned (the child is reaped at next startup).
 _DEFAULT_SERENA_CLOSE_TIMEOUT = 10.0
+# Grace above serena_timeout() before the out-of-band watchdog force-kills a child whose stdio
+# read wedged mid-request (issue #30): the cooperative fail_after cannot unwind that await, so an
+# independent timer kills the child's process group from the outside. Kept relative to the per-call
+# timeout so tests that lower only SERENA_TIMEOUT_ENV don't arm an absolute hard kill.
+_DEFAULT_SERENA_HARD_DEADLINE_GRACE = 15.0
+# SIGTERM→SIGKILL escalation gap inside _kill_child_group (a wedged child rarely honours SIGTERM).
+_HARD_KILL_GRACE_SECONDS = 0.5
 TOOL_PREFIX = "serena_"
 _SNAPSHOT_NAME = "serena_tools.json"
 
@@ -103,6 +111,20 @@ def _positive_float_env(name: str, default: float) -> float:
 def serena_timeout() -> float:
     """Return the per-call Serena timeout in seconds (env-overridable)."""
     return _positive_float_env(SERENA_TIMEOUT_ENV, _DEFAULT_SERENA_TIMEOUT)
+
+
+def serena_hard_deadline() -> float:
+    """Return the out-of-band hard-kill deadline in seconds (env-overridable grace).
+
+    Sits a fixed grace *above* :func:`serena_timeout` so it only ever fires when the cooperative
+    per-call timeout failed to unwind a wedged stdio read (issue #30) — a child that stops
+    answering mid-request, where ``anyio.fail_after``'s cancellation never reaches the blocked
+    await. Kept timeout-relative (not absolute) so a test that lowers only ``SERENA_TIMEOUT_ENV``
+    does not accidentally arm a hard kill that perturbs its cooperative-recovery assertions;
+    ``REPO_AGENT_HARNESS_SERENA_HARD_DEADLINE`` overrides the grace, not the total.
+    """
+    grace = _positive_float_env(SERENA_HARD_DEADLINE_ENV, _DEFAULT_SERENA_HARD_DEADLINE_GRACE)
+    return serena_timeout() + grace
 
 
 def serena_connect_timeout() -> float:
@@ -282,6 +304,57 @@ def _stale_serena_procs(ours: str, root_resolved: str) -> list[psutil.Process]:
     return victims
 
 
+def _direct_child_pids() -> set[int]:
+    """Return the PIDs of this process's direct children (empty if psutil is unavailable).
+
+    Snapshotted just before a connect so :func:`_discover_child_pid` can diff out the freshly
+    spawned Serena child — fastmcp keeps the child PID closure-local in ``stdio_client`` and never
+    exposes it, so the gateway recovers it out-of-band by this children-diff.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return set()
+    try:
+        return {child.pid for child in psutil.Process().children()}
+    except psutil.Error:
+        return set()
+
+
+def _discover_child_pid(before: set[int]) -> int | None:
+    """Return the PID of the Serena child that appeared since the ``before`` snapshot.
+
+    Diffs the current direct children against ``before`` (taken before the connect): the new
+    direct child is the Serena process. Its process group — killed via :func:`_kill_child_group`
+    — also reaps the language-server grandchildren spawned later. ``None`` when psutil is
+    unavailable or no new child appeared (e.g. an injected in-process transport).
+    """
+    new = _direct_child_pids() - before
+    return min(new) if new else None
+
+
+def _kill_child_group(pid: int) -> None:
+    """Force-kill the process group led by ``pid`` (SIGTERM, brief grace, then SIGKILL).
+
+    The Serena child is spawned by mcp's stdio client with ``start_new_session=True``, so it leads
+    its own process group; killing the group reaps the child and its language-server grandchildren.
+    This is the only thing that unwedges a child whose stdio read ignores the cooperative
+    ``fail_after`` (issue #30): the kill closes the child's stdout, so the blocked harness-side
+    read finally errors out. Idempotent and best-effort — ``getpgid``/``killpg`` on an
+    already-exited group raise a suppressed ``ProcessLookupError`` — so it is safe to call on the
+    clean-close path too. Runs synchronously (offloaded to a thread by its async callers so the
+    short SIGTERM→SIGKILL grace never blocks the event loop).
+    """
+    import signal
+
+    with suppress(ProcessLookupError, PermissionError, OSError):
+        pgid = os.getpgid(pid)
+        os.killpg(pgid, signal.SIGTERM)
+        time.sleep(_HARD_KILL_GRACE_SECONDS)
+        with suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pgid, signal.SIGKILL)
+
+
 # Consecutive per-call timeouts (with no intervening success) after which the shared Serena
 # child is treated as wedged and respawned, even while it still reports connected. ``is_connected``
 # lags a dead child, and a hung language server can hold the connection open yet never answer, so
@@ -338,6 +411,10 @@ class SerenaGateway:
         # child) down — that was the parallel-subagent respawn storm.
         self._connect_task: asyncio.Task[Client] | None = None
         self._consecutive_timeouts = 0
+        # PID of the live child Serena process, captured out-of-band at connect (fastmcp never
+        # exposes it). The out-of-band watchdog and teardown escalation kill its process group to
+        # unwedge / reap a child whose stdio read ignores the cooperative timeout (issue #30).
+        self._child_pid: int | None = None
         self.root: str | None = root if isinstance(root, str) else None
         # In-flight registry (diagnostics #26): the single source of truth for *every* currently
         # executing tool dispatch — both serena_* forwards (registered in ``call``) and generic
@@ -432,6 +509,10 @@ class SerenaGateway:
         # Persistent session: enter the context once and keep it open across calls (closed in
         # _discard_locked), so we deliberately call the dunder instead of ``async with``.
         budget = serena_connect_timeout()
+        # Snapshot our direct children before the spawn so the freshly launched Serena child can be
+        # identified by diff (fastmcp keeps its PID closure-local), giving the watchdog a process
+        # group to kill if this child later wedges mid-request.
+        before = _direct_child_pids()
         try:
             with anyio.fail_after(budget):
                 await client.__aenter__()  # noqa: PLC2801
@@ -439,11 +520,13 @@ class SerenaGateway:
             await self._discard_locked()
             msg = f"serena connect timed out after {budget}s"
             raise TimeoutError(msg) from None
+        self._child_pid = _discover_child_pid(before)
         return client
 
     async def _discard_locked(self) -> None:
         """Tear down the current client so the next call reconnects cleanly. Caller holds the lock."""
         old, self._client = self._client, None
+        pid, self._child_pid = self._child_pid, None
         if old is not None:
             # Bound the teardown: ``self._client`` is already nulled, so a close that never
             # returns must not hold the lock forever (that wedges every concurrent caller).
@@ -451,6 +534,12 @@ class SerenaGateway:
             # surrounding ``suppress`` swallows, abandoning a hung close after the budget.
             with suppress(Exception), anyio.fail_after(serena_close_timeout()):
                 await old.close()
+        # A wedged ``close()`` is abandoned above, leaking the child; force-kill its process group
+        # so a reaped child is actually gone, not orphaned. Offloaded to a thread so the
+        # SIGTERM→SIGKILL grace can't block the loop; idempotent/suppressed, so it is harmless on
+        # the clean-close path (the child is already dead → killpg no-ops).
+        if pid is not None:
+            await to_thread.run_sync(_kill_child_group, pid)
 
     async def _reap_if_current(self, client: Client) -> None:
         """Discard the shared session iff it is still the one ``client`` refers to.
@@ -554,23 +643,71 @@ class SerenaGateway:
         Runs inside the outer dispatch deadline opened by :meth:`call`; the per-call
         :func:`serena_timeout` bounds only the forward, while the surrounding deadline bounds the
         connect/lock-wait too. Teardown is scoped by why the call ended (see :meth:`call`).
+
+        Cooperative ``anyio.fail_after`` cannot interrupt an ``await`` blocked inside fastmcp's
+        stdio read when the child wedges mid-request (issue #30): the read never observes the
+        cancellation, so the await never returns and the timeout recovery below is unreachable. An
+        out-of-band **watchdog** closes that gap — armed at :func:`serena_hard_deadline` (strictly
+        above the per-call timeout), it force-kills the child's process group from the outside,
+        closing its stdout so the blocked read finally errors out and the await unwinds here.
+        ``hard_killed`` records that we caused it, so whichever exception the unwinding read
+        surfaces (a transport error, a converted ``TimeoutError``, or a stray cancellation) is
+        normalized to a ``TimeoutError`` and the dead session reaped — never a caller cancellation.
         """
         client = await self._connected_client()
+        hard_killed = False
+
+        async def _watchdog() -> None:
+            # Independent of the cooperative fail_after the wedged await ignores: sleep past the
+            # hard deadline, then kill the child's process group so its stdout closes and the
+            # blocked read unwinds. Set the flag *before* the kill so the resulting error is
+            # already attributable to us. Cancelled in ``finally`` on every healthy/normal exit.
+            nonlocal hard_killed
+            await anyio.sleep(serena_hard_deadline())
+            pid = self._child_pid
+            if pid is None:
+                return
+            hard_killed = True
+            await to_thread.run_sync(_kill_child_group, pid)
+
+        watchdog = asyncio.ensure_future(_watchdog())
         try:
             with anyio.fail_after(serena_timeout()):
                 result = await client.call_tool_mcp(name, arguments)
         except TimeoutError:
+            if hard_killed:
+                raise await self._reap_hard_killed(client, name) from None
             await self._reap_if_wedged(client)
             msg = f"serena call {name!r} timed out after {serena_timeout()}s"
             raise TimeoutError(msg) from None
         except anyio.get_cancelled_exc_class():
+            if hard_killed:
+                raise await self._reap_hard_killed(client, name) from None
             raise
         except BaseException:
+            if hard_killed:
+                raise await self._reap_hard_killed(client, name) from None
             await self._reap_if_current(client)
             raise
         else:
             self._consecutive_timeouts = 0
             return result
+        finally:
+            watchdog.cancel()
+            with suppress(BaseException):
+                await watchdog
+
+    async def _reap_hard_killed(self, client: Client, name: str) -> TimeoutError:
+        """Reap the session a watchdog hard-killed and build the normalized timeout error.
+
+        The child is already dead (its process group was killed), so this discards the dead
+        session unconditionally via :meth:`_reap_if_current` — the next call respawns a fresh
+        child — and returns the ``TimeoutError`` the caller re-raises. Used for *all* three
+        unwinding exception types so the wedge always surfaces as a timeout, never a cancellation.
+        """
+        await self._reap_if_current(client)
+        msg = f"serena call {name!r} hard-killed after {serena_hard_deadline()}s (wedged mid-request)"
+        return TimeoutError(msg)
 
     async def _reap_if_wedged(self, client: Client) -> None:
         """Respawn the shared session when a *single* slow call is not the whole story.
