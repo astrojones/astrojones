@@ -9,12 +9,14 @@ hanging the suite.
 
 import asyncio
 import sys
+from contextlib import suppress
 from pathlib import Path
 
+import anyio
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
-from repo_agent_harness import gateway, server
+from repo_agent_harness import gateway, health, server
 
 pytestmark = pytest.mark.anyio
 
@@ -57,6 +59,45 @@ async def test_many_concurrent_gateway_calls_all_resolve(repo):
         results = await asyncio.gather(*(gw.call("find_symbol", {"name_path": str(i)}) for i in range(12)))
         echoes = sorted(int((r.structuredContent or {}).get("echo")) for r in results)
         assert echoes == list(range(12))
+    finally:
+        await gw.aclose()
+
+
+class _HangingClose:
+    """A client wrapper whose close() blocks forever and reports disconnected (FIX C)."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def close(self) -> None:
+        await asyncio.sleep(3600)
+
+    async def __aenter__(self):
+        return self._inner
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+
+@pytest.mark.timeout(45)
+async def test_hung_close_does_not_block_siblings(repo, monkeypatch):
+    """A hung close() on reconnect must not block the herd waiting on the shared lock.
+
+    With the close bounded by serena_close_timeout(), the first caller's reconnect abandons
+    the hung close after the budget and releases the lock; every sibling then proceeds.
+    Without the bound the whole gather hangs forever behind the wedged lock.
+    """
+    monkeypatch.setenv(gateway.SERENA_CLOSE_TIMEOUT_ENV, "0.5")
+    gw = _fake_gateway(repo)
+    try:
+        await gw.call("find_symbol", {"name_path": "seed"})
+        gw._client = _HangingClose(gw._client)
+        results = await asyncio.gather(*(gw.call("find_symbol", {"name_path": str(i)}) for i in range(8)))
+        echoes = sorted(int((r.structuredContent or {}).get("echo")) for r in results)
+        assert echoes == list(range(8))
     finally:
         await gw.aclose()
 
@@ -141,3 +182,147 @@ async def test_server_lifespan_pre_warms_serena(server_with_fake_serena):
             assert (result.structured_content or {}).get("echo") == "warm"
     finally:
         await srv._serena.aclose()
+
+
+# --------------------------------------------------------- in-flight registry under a wedge (#26)
+
+
+@pytest.mark.timeout(30)
+async def test_in_flight_snapshot_lists_a_wedged_call_then_clears(repo, monkeypatch):
+    """A live serena_* call wedged in the child shows up in ``in_flight_snapshot`` then clears (#26).
+
+    ``call`` registers every forward in the shared in-flight registry, so while a ``hang`` call is
+    blocked in the fake child it is the single, visible entry. A tight ``serena_timeout`` reaps the
+    hang shortly after, and the ``finally`` in ``register_inflight`` must drop the entry — proving
+    no phantom row leaks after a timed-out (cancelled) call.
+    """
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "1.0")
+    gw = _fake_gateway(repo)
+    try:
+        # Warm the session so the in-flight entry we observe is the forward, not the cold connect.
+        await gw.call("find_symbol", {"name_path": "seed"})
+        hang = asyncio.ensure_future(gw.call("hang", {}))
+
+        async def _wait_for_inflight() -> list[dict]:
+            for _ in range(200):
+                snap = gw.in_flight_snapshot()
+                if any(e["tool"] == "serena_hang" for e in snap):
+                    return snap
+                await asyncio.sleep(0.02)
+            return gw.in_flight_snapshot()
+
+        snap = await _wait_for_inflight()
+        entry = next(e for e in snap if e["tool"] == "serena_hang")
+        assert entry["elapsed_s"] >= 0.0
+        assert entry["stalled"] is False
+
+        # The hang call is reaped by serena_timeout; awaiting it surfaces the timeout.
+        with pytest.raises(TimeoutError, match="timed out"):
+            await hang
+        # register_inflight's finally must have removed the entry — no phantom after a cancel/timeout.
+        assert all(e["tool"] != "serena_hang" for e in gw.in_flight_snapshot())
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_in_flight_stalled_flag_under_a_wedge(repo, monkeypatch):
+    """A long-running in-flight call is flagged ``stalled`` once it crosses the threshold (#26).
+
+    The stall threshold is purely advisory (it never cancels), so dropping ``_INFLIGHT_STALL_SECONDS``
+    to zero lets a genuinely in-flight wedged call report ``stalled=True`` deterministically without
+    waiting the real 120s.
+    """
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "1.0")
+    monkeypatch.setattr(gateway, "_INFLIGHT_STALL_SECONDS", 0.0)
+    gw = _fake_gateway(repo)
+    try:
+        await gw.call("find_symbol", {"name_path": "seed"})
+        hang = asyncio.ensure_future(gw.call("hang", {}))
+        stalled = None
+        for _ in range(200):
+            snap = gw.in_flight_snapshot()
+            match = next((e for e in snap if e["tool"] == "serena_hang"), None)
+            if match is not None and match["stalled"]:
+                stalled = match
+                break
+            await asyncio.sleep(0.02)
+        assert stalled is not None, "wedged call was never flagged stalled"
+        assert stalled["elapsed_s"] >= 0.0
+        with pytest.raises(TimeoutError, match="timed out"):
+            await hang
+    finally:
+        await gw.aclose()
+
+
+@pytest.mark.timeout(30)
+async def test_repo_health_surfaces_the_in_flight_wedge(repo, monkeypatch):
+    """``health.run`` reports the same wedged in-flight call so diagnostics see it (#26).
+
+    ``_in_flight`` duck-types on ``in_flight_snapshot`` and maps each entry to an ``InFlightCall``,
+    so a health snapshot taken while a ``hang`` forward is in flight must list it. The snapshot is
+    computed in a worker thread (as the real health check is) to mirror the cross-thread read.
+    """
+    monkeypatch.setenv(gateway.SERENA_TIMEOUT_ENV, "1.0")
+    gw = _fake_gateway(repo)
+    try:
+        await gw.call("find_symbol", {"name_path": "seed"})
+        hang = asyncio.ensure_future(gw.call("hang", {}))
+        snapshot = None
+        for _ in range(200):
+            snap = await anyio.to_thread.run_sync(
+                lambda: health.run(str(repo), only="diagnostics", refresh=True, gateway=gw)
+            )
+            if any(c.tool == "serena_hang" for c in snap.in_flight):
+                snapshot = snap
+                break
+            await asyncio.sleep(0.02)
+        assert snapshot is not None, "health snapshot never surfaced the in-flight wedge"
+        call = next(c for c in snapshot.in_flight if c.tool == "serena_hang")
+        assert call.cwd == (gw.root or "")
+        assert call.elapsed_s >= 0.0
+        with pytest.raises(TimeoutError, match="timed out"):
+            await hang
+    finally:
+        await gw.aclose()
+
+
+# ----------------------------------------------- actionable connect/lock-wedge message (#25)
+
+
+class _HangingConnect:
+    """A client whose connect (``__aenter__``) blocks forever — to wedge the gateway connect."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def __aenter__(self):
+        await anyio.sleep_forever()
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.timeout(30)
+async def test_wedged_connect_raises_actionable_message(repo, monkeypatch):
+    """A wedged connect surfaces a TimeoutError naming the tool + connect/dispatch/lock (#25).
+
+    The outer dispatch deadline bounds the whole ``call`` (connect + lock-wait), so a connect that
+    never returns is reaped with a message an operator can act on: it must mention the offending
+    tool and point at the dispatch/connect/lock as the wedge site, not a bare 'timed out'.
+    """
+    monkeypatch.setenv(gateway.SERENA_DISPATCH_TIMEOUT_ENV, "0.5")
+    gw = _fake_gateway(repo)
+    monkeypatch.setattr(gw, "_ensure_client", _HangingConnect)
+    try:
+        with pytest.raises(TimeoutError) as excinfo:
+            await gw.call("find_symbol", {"name_path": "x"})
+        message = str(excinfo.value)
+        assert "find_symbol" in message
+        assert any(word in message for word in ("dispatch", "connect", "lock")), message
+    finally:
+        with suppress(BaseException):
+            await gw.aclose()
