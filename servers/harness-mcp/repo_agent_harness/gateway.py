@@ -137,6 +137,20 @@ def serena_connect_timeout() -> float:
     return _positive_float_env(SERENA_CONNECT_TIMEOUT_ENV, _DEFAULT_SERENA_CONNECT_TIMEOUT)
 
 
+def serena_connect_hard_deadline() -> float:
+    """Return the out-of-band connect hard-kill deadline in seconds (env-overridable grace).
+
+    The connect-time analogue of :func:`serena_hard_deadline`: a grace *above*
+    :func:`serena_connect_timeout`, fired only when a child wedges mid-initialize with a
+    cancellation-deaf stdio read (issue #30 at connect time) — where ``anyio.fail_after`` cannot
+    unwind the blocked ``__aenter__`` and ``_child_pid`` is not set yet, so the per-call dispatch
+    watchdog never arms. Shares the ``REPO_AGENT_HARNESS_SERENA_HARD_DEADLINE`` grace and stays
+    connect-timeout-relative, so a test lowering only the connect timeout never arms a stray kill.
+    """
+    grace = _positive_float_env(SERENA_HARD_DEADLINE_ENV, _DEFAULT_SERENA_HARD_DEADLINE_GRACE)
+    return serena_connect_timeout() + grace
+
+
 def serena_close_timeout() -> float:
     """Return the per-teardown close timeout in seconds (env-overridable).
 
@@ -503,23 +517,71 @@ class SerenaGateway:
         unbounded and, since the caller holds the lock, wedge every other ``serena_*`` call.
         On timeout the half-opened client is discarded so the next call respawns cleanly
         (fastmcp reaps the spawned child on the cancellation that ``fail_after`` raises).
+
+        That cooperative bound is not enough on its own: a child that wedges *mid-initialize* with
+        a cancellation-deaf stdio read (issue #30, at connect time) never lets ``fail_after`` unwind
+        the blocked ``__aenter__``, and no PID is captured yet, so the per-call dispatch watchdog
+        never arms — an unbounded first-call hang (the live ``serena_initial_instructions`` stall).
+        An out-of-band **connect watchdog** closes that gap: armed at
+        :func:`serena_connect_hard_deadline`, it discovers the freshly spawned child by diffing the
+        pre-spawn snapshot and force-kills its process group, closing the child's stdout so the
+        blocked connect read errors out and ``__aenter__`` unwinds here. ``hard_killed`` records
+        that we caused it, so whichever exception the unwinding read surfaces (a transport error, a
+        converted ``TimeoutError``, or a stray cancellation) is normalized to a ``TimeoutError`` and
+        the dead half-open session discarded — the next call respawns a fresh child.
         """
         await self._discard_locked()
         client = self._ensure_client()
-        # Persistent session: enter the context once and keep it open across calls (closed in
-        # _discard_locked), so we deliberately call the dunder instead of ``async with``.
         budget = serena_connect_timeout()
         # Snapshot our direct children before the spawn so the freshly launched Serena child can be
-        # identified by diff (fastmcp keeps its PID closure-local), giving the watchdog a process
-        # group to kill if this child later wedges mid-request.
+        # identified by diff (fastmcp keeps its PID closure-local): the watchdog gets a process
+        # group to kill if this child wedges mid-connect, and the success path seeds _child_pid.
         before = _direct_child_pids()
+        hard_killed = False
+
+        async def _connect_watchdog() -> None:
+            # Independent of the cooperative connect fail_after a mid-initialize wedge ignores: sleep
+            # past the connect hard deadline, then kill the child's process group so its stdout closes
+            # and the blocked __aenter__ read unwinds. The child is spawned before the initialize
+            # handshake, so it is already a visible direct child though __aenter__ has not returned;
+            # discover it by the same children-diff and record the PID so the discard does not leak it.
+            nonlocal hard_killed
+            await anyio.sleep(serena_connect_hard_deadline())
+            pid = _discover_child_pid(before)
+            if pid is None:
+                return
+            hard_killed = True
+            self._child_pid = pid
+            await to_thread.run_sync(_kill_child_group, pid)
+
+        watchdog = asyncio.ensure_future(_connect_watchdog())
         try:
             with anyio.fail_after(budget):
                 await client.__aenter__()  # noqa: PLC2801
         except TimeoutError:
             await self._discard_locked()
-            msg = f"serena connect timed out after {budget}s"
+            msg = (
+                f"serena connect hard-killed after {serena_connect_hard_deadline()}s (wedged mid-connect)"
+                if hard_killed
+                else f"serena connect timed out after {budget}s"
+            )
             raise TimeoutError(msg) from None
+        except anyio.get_cancelled_exc_class():
+            if hard_killed:
+                await self._discard_locked()
+                msg = f"serena connect hard-killed after {serena_connect_hard_deadline()}s (wedged mid-connect)"
+                raise TimeoutError(msg) from None
+            raise
+        except BaseException:
+            if hard_killed:
+                await self._discard_locked()
+                msg = f"serena connect hard-killed after {serena_connect_hard_deadline()}s (wedged mid-connect)"
+                raise TimeoutError(msg) from None
+            raise
+        finally:
+            watchdog.cancel()
+            with suppress(BaseException):
+                await watchdog
         self._child_pid = _discover_child_pid(before)
         return client
 

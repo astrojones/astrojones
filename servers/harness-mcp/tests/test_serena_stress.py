@@ -185,6 +185,79 @@ async def test_mid_request_wedge_is_hard_killed(repo, monkeypatch):
         await gw.aclose()
 
 
+@pytest.mark.timeout(40)
+async def test_connect_time_wedge_is_hard_killed(repo, monkeypatch):
+    """A child that wedges *mid-connect* (cancellation-deaf initialize read) is hard-killed.
+
+    The dispatch watchdog (issue #30) only arms once the session is connected, so a child that
+    wedges inside ``__aenter__`` itself — the very first call's cold connect, where no PID is
+    captured yet — was still an unbounded hang (the live ``serena_initial_instructions`` stall).
+    ``FAKE_SERENA_BOOT_DELAY`` makes the child spawn then sleep *before* the MCP initialize
+    handshake, so the connect read blocks while the child process is alive and killable; shielding
+    ``__aenter__`` makes that read deaf to the cooperative connect ``fail_after`` exactly like the
+    production wedge. Only the connect watchdog's external kill can free it: it must discover the
+    freshly spawned child, kill its process group, surface a ``TimeoutError`` (never hang), and let
+    a fresh connect succeed afterwards.
+
+    The await is *message-matched*, not bounded by a plain ``wait_for`` deadline: a pre-fix gateway
+    hangs, so ``wait_for`` would itself raise a bare ``TimeoutError`` and mask the regression — the
+    assertion must see the watchdog's own "hard-killed" error, not the test harness's own timeout.
+    """
+    monkeypatch.setenv(gateway.SERENA_CONNECT_TIMEOUT_ENV, "4.0")
+    monkeypatch.setenv(gateway.SERENA_HARD_DEADLINE_ENV, "0.5")  # connect hard deadline = 4.0 + 0.5
+
+    # Make the connect read deaf to cancellation: the shielded scope swallows the cooperative
+    # connect timeout, so only the watchdog's external kill can unwedge the blocked __aenter__.
+    real_aenter = Client.__aenter__
+
+    async def cancellation_deaf(self):
+        with anyio.CancelScope(shield=True):
+            return await real_aenter(self)
+
+    monkeypatch.setattr(Client, "__aenter__", cancellation_deaf)
+
+    # The child sleeps before the initialize handshake (the env must be passed explicitly — mcp's
+    # stdio client does not forward the parent env), so the connect blocks on a live, killable child.
+    wedged = StdioTransport(
+        command=sys.executable,
+        args=[str(FAKE)],
+        cwd=str(repo),
+        keep_alive=True,
+        env={**os.environ, "FAKE_SERENA_BOOT_DELAY": "3600"},
+    )
+    gw = gateway.SerenaGateway(str(repo), transport=wedged)
+    child_pid = None
+    try:
+        before = {child.pid for child in psutil.Process().children()}
+        call_task = asyncio.create_task(gw.call("find_symbol", {"name_path": "x"}))
+
+        # Wait for the wedged child to spawn so we can prove the watchdog later kills it.
+        for _ in range(400):
+            new = {child.pid for child in psutil.Process().children()} - before
+            if new:
+                child_pid = min(new)
+                break
+            await asyncio.sleep(0.01)
+        assert child_pid is not None and psutil.pid_exists(child_pid), "wedged child never spawned"
+
+        # The connect watchdog must fire at the connect hard deadline and surface its own timeout
+        # (matching its message, not the harness's wait_for, so a pre-fix hang fails loudly).
+        with pytest.raises(TimeoutError, match="hard-killed"):
+            await asyncio.wait_for(call_task, timeout=20)
+        assert not psutil.pid_exists(child_pid), "connect watchdog did not hard-kill the mid-connect child"
+
+        # Recovery: a cancellable connect to a child with no boot delay must respawn and answer.
+        monkeypatch.setattr(Client, "__aenter__", real_aenter)
+        gw._injected_transport = StdioTransport(
+            command=sys.executable, args=[str(FAKE)], cwd=str(repo), keep_alive=True
+        )
+        assert await _echo(await gw.call("find_symbol", {"name_path": "recovered"})) == "recovered"
+    finally:
+        if child_pid is not None:
+            gateway._kill_child_group(child_pid)
+        await gw.aclose()
+
+
 @pytest.mark.timeout(90)
 async def test_intermittent_timeouts_do_not_disturb_concurrent_healthy_calls(repo, monkeypatch):
     """Timeouts interleaved with healthy concurrent calls disturb neither, across many rounds.
