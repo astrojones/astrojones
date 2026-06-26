@@ -335,16 +335,52 @@ def _direct_child_pids() -> set[int]:
         return set()
 
 
-def _discover_child_pid(before: set[int]) -> int | None:
+def _cmdline_matches_launch(cmdline: list[str], markers: list[str]) -> bool:
+    """True when every token in ``markers`` appears in ``cmdline``.
+
+    ``markers`` is the argv the gateway launched its child with — ``serena_args(root)`` in
+    production (carrying ``start-mcp-server`` and the precise ``--project <root>``) or an injected
+    transport's args in tests. Requiring all of them present uniquely fingerprints the gateway's own
+    child and excludes the sibling lint/typecheck/git subprocesses that may fork into the connect
+    window and would otherwise win a naive ``min(new)`` PID diff (issue #30 follow-up). Mirrors the
+    argv-matching idiom of :func:`_is_stale_serena_child`.
+    """
+    return set(markers).issubset(cmdline)
+
+
+def _discover_child_pid(before: set[int], launch_args: list[str] | None = None) -> int | None:
     """Return the PID of the Serena child that appeared since the ``before`` snapshot.
 
-    Diffs the current direct children against ``before`` (taken before the connect): the new
-    direct child is the Serena process. Its process group — killed via :func:`_kill_child_group`
-    — also reaps the language-server grandchildren spawned later. ``None`` when psutil is
-    unavailable or no new child appeared (e.g. an injected in-process transport).
+    Diffs the current direct children against ``before`` (taken before the connect) and selects the
+    new child whose argv contains the launch markers (``launch_args`` — the gateway's own child
+    argv, e.g. ``serena_args(root)`` with its ``start-mcp-server``/``--project <root>``) — *not*
+    simply the lowest new PID. A sibling subprocess (a lint/typecheck/git child of the perception
+    daemon or a health check) can fork into the same window and grab a lower PID; adopting it would
+    point the watchdog at a short-lived process and leave the real, wedged Serena unreaped — an
+    indefinite hang for every parallel caller (issue #30 follow-up). The selected child's process
+    group — killed via :func:`_kill_child_group` — also reaps the language-server grandchildren
+    spawned later. ``None`` when psutil is unavailable or no matching new child appeared (e.g. an
+    injected in-process transport that spawns no child).
     """
-    new = _direct_child_pids() - before
-    return min(new) if new else None
+    markers = list(launch_args) if launch_args else ["start-mcp-server"]
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        children = psutil.Process().children()
+    except psutil.Error:
+        return None
+    for child in sorted(children, key=lambda c: c.pid):
+        if child.pid in before:
+            continue
+        try:
+            cmdline = child.cmdline()
+        except psutil.Error:
+            continue
+        if _cmdline_matches_launch(cmdline or [], markers):
+            return child.pid
+    return None
 
 
 def _kill_child_group(pid: int) -> None:
@@ -537,6 +573,9 @@ class SerenaGateway:
         # identified by diff (fastmcp keeps its PID closure-local): the watchdog gets a process
         # group to kill if this child wedges mid-connect, and the success path seeds _child_pid.
         before = _direct_child_pids()
+        # The argv we launch the child with — its fingerprint for discovery, so a sibling
+        # lint/test subprocess that forks into the connect window is not mistaken for it.
+        launch_args = self._child_launch_args()
         hard_killed = False
 
         async def _connect_watchdog() -> None:
@@ -544,10 +583,11 @@ class SerenaGateway:
             # past the connect hard deadline, then kill the child's process group so its stdout closes
             # and the blocked __aenter__ read unwinds. The child is spawned before the initialize
             # handshake, so it is already a visible direct child though __aenter__ has not returned;
-            # discover it by the same children-diff and record the PID so the discard does not leak it.
+            # discover it by the same children-diff (matching the launch argv, not lowest PID) and
+            # record the PID so the discard does not leak it.
             nonlocal hard_killed
             await anyio.sleep(serena_connect_hard_deadline())
-            pid = _discover_child_pid(before)
+            pid = _discover_child_pid(before, launch_args)
             if pid is None:
                 return
             hard_killed = True
@@ -582,8 +622,20 @@ class SerenaGateway:
             watchdog.cancel()
             with suppress(BaseException):
                 await watchdog
-        self._child_pid = _discover_child_pid(before)
+        self._child_pid = _discover_child_pid(before, launch_args)
         return client
+
+    def _child_launch_args(self) -> list[str] | None:
+        """Return the argv the active transport launches the child with (for PID discovery).
+
+        ``serena_args(root)`` for a real Serena child (its ``--project <root>`` pins discovery to
+        exactly this repo's child); the injected transport's ``args`` in tests. ``None`` when the
+        root is unresolved or an in-process transport carries no args — discovery then falls back to
+        the generic ``start-mcp-server`` marker.
+        """
+        if self._injected_transport is not None:
+            return list(getattr(self._injected_transport, "args", None) or []) or None
+        return serena_args(self.root) if self.root else None
 
     async def _discard_locked(self) -> None:
         """Tear down the current client so the next call reconnects cleanly. Caller holds the lock."""

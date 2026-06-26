@@ -501,6 +501,64 @@ def test_reap_noop_for_bare_path_command(monkeypatch):
     assert gateway.reap_stale_serena_children("/repo") == []
 
 
+class _FakeChild:
+    """Minimal psutil.Process child stub exposing .pid and .cmdline() for discovery tests."""
+
+    def __init__(self, pid: int, cmdline: list[str]) -> None:
+        self.pid = pid
+        self._cmdline = cmdline
+
+    def cmdline(self) -> list[str]:
+        return self._cmdline
+
+
+def _fake_psutil(children: list[_FakeChild]) -> SimpleNamespace:
+    return SimpleNamespace(
+        Error=Exception,
+        Process=lambda: SimpleNamespace(children=lambda: children),
+    )
+
+
+def test_discover_child_pid_picks_serena_not_lower_sibling(monkeypatch, tmp_path):
+    """The freshly spawned Serena child must be identified by its argv, not by lowest PID.
+
+    A sibling subprocess (lint/typecheck/git from the perception daemon or a health check) can
+    fork into the connect window and grab a *lower* PID than Serena. The naive ``min(new)`` diff
+    adopts that sibling; the watchdog then kills a short-lived lint process while the real wedged
+    Serena is never reaped (issue #30 follow-up). Discovery must select the ``start-mcp-server``
+    child regardless of PID ordering.
+    """
+    root = str(tmp_path)
+    before = {100}
+    # Lower PID, but NOT serena (a perception-daemon lint subprocess); higher PID is the real serena.
+    sibling = _FakeChild(101, ["/usr/bin/ruff", "check", "--quiet", root])
+    serena = _FakeChild(202, ["py", "/cur/bin/serena", "start-mcp-server", "--project", root])
+    children = [_FakeChild(100, ["py", "old-child"]), sibling, serena]
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil(children))
+
+    assert gateway._discover_child_pid(before) == 202
+
+
+def test_discover_child_pid_matches_project_root(monkeypatch, tmp_path):
+    """Launch args carrying ``--project <root>`` pin discovery to this repo's child only."""
+    root = str(tmp_path)
+    before: set[int] = set()
+    # Lower PID serena belongs to another project; higher PID serena is ours (matches --project root).
+    other = _FakeChild(300, ["py", "serena", "start-mcp-server", "--project", "/elsewhere"])
+    ours = _FakeChild(301, ["py", "serena", "start-mcp-server", "--project", root])
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil([other, ours]))
+
+    assert gateway._discover_child_pid(before, ["start-mcp-server", "--project", root]) == 301
+
+
+def test_discover_child_pid_none_without_serena_child(monkeypatch):
+    """No new child matches the launch markers (e.g. injected in-process transport) -> None."""
+    sibling = _FakeChild(101, ["/usr/bin/ruff", "check"])
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil([sibling]))
+
+    assert gateway._discover_child_pid({100}) is None
+
+
 def test_diagnostics_check_counts_from_fake_result(repo):
     (repo / "src" / "payment.py").write_text("def charge():\n    return 2\n")
     canned = SimpleNamespace(
