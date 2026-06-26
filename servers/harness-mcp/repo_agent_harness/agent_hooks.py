@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import suppress
 from pathlib import Path
 
-from repo_agent_harness import git, policies, secrets, serena_gate
+from repo_agent_harness import git, paths, policies, secrets, serena_gate
 
 _GUARDED_FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit"}
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -90,16 +91,116 @@ def pre_tool_use(data: dict) -> dict:
     return {}
 
 
+def _read_json(path: Path) -> dict | list | None:
+    """Best-effort JSON read; None when the file is missing or unparseable (fail-open)."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json(path: Path, obj: dict | list) -> None:
+    """Best-effort JSON write (the parent dir is created by paths.repo_state_dir)."""
+    with suppress(OSError):
+        path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+def _record_touched(repo: str, path: str) -> None:
+    """Append the agent-edited path to the per-repo touched-set (external-vs-agent attribution)."""
+    try:
+        rel = str(Path(path).resolve().relative_to(Path(repo).resolve()))
+    except (ValueError, OSError):
+        rel = path
+    target = paths.perception_touched_file(repo)
+    existing = _read_json(target)
+    touched = existing if isinstance(existing, list) else []
+    if rel not in touched:
+        touched.append(rel)
+        _write_json(target, touched)
+
+
+def _perception_deltas(current: dict, last: dict | None) -> list[str]:
+    """Lines describing what changed in perception since ``last`` (the snapshot last surfaced).
+
+    With no prior marker (``last is None``) it reports the current hazards (failing checks,
+    existing conflicts) as the initial perception; otherwise it reports only transitions
+    (a check went red or recovered, a branch/HEAD switch, newly-appeared conflicts).
+    """
+    lines: list[str] = []
+    last_verdicts = {v["id"]: v for v in (last or {}).get("verdicts", []) if isinstance(v, dict) and "id" in v}
+    for v in current.get("verdicts", []):
+        if not isinstance(v, dict) or "id" not in v:
+            continue
+        ok, prev = v.get("ok"), last_verdicts.get(v["id"], {}).get("ok")
+        if ok is False and prev is not False:
+            lines.append(f"{v['id']}: now FAILING — {str(v.get('summary', '')).strip()}".rstrip(" —"))
+        elif ok is True and prev is False:
+            lines.append(f"{v['id']}: recovered (passing again)")
+
+    git_now, git_last = current.get("git") or {}, (last or {}).get("git") or {}
+    b_now, b_last = git_now.get("branch", ""), git_last.get("branch", "")
+    h_now, h_last = git_now.get("head", ""), git_last.get("head", "")
+    if last is not None and b_now and b_last and b_now != b_last:
+        lines.append(f"git: branch switched {b_last} -> {b_now} (possibly by another process)")
+    elif last is not None and b_now == b_last and h_now and h_last and h_now != h_last:
+        lines.append(f"git: HEAD moved {h_last} -> {h_now}")
+    new_conflicts = sorted(set(git_now.get("conflicted") or []) - set(git_last.get("conflicted") or []))
+    if new_conflicts:
+        lines.append(f"git: merge conflicts in {', '.join(new_conflicts)}")
+    return lines
+
+
 def post_tool_use(data: dict) -> dict:
-    """After an edit/write, nudge the agent to verify the change."""
-    if data.get("tool_name", "") in _EDIT_TOOLS:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "additionalContext": _VERIFY_NUDGE,
-            }
-        }
-    return {}
+    """After an edit/write: record the touched path and surface any current check regression.
+
+    When the perception daemon has a snapshot, this stays quiet on green (the harness is already
+    re-running checks for you) and warns only when a check is red. With no snapshot yet (e.g. a
+    non-MCP client with no running daemon) it falls back to the static verify nudge.
+    """
+    if data.get("tool_name", "") not in _EDIT_TOOLS:
+        return {}
+    repo = git.repo_root()
+    tin = data.get("tool_input") or {}
+    path = tin.get("file_path") or tin.get("path") or tin.get("notebook_path") or ""
+    if repo and path:
+        _record_touched(repo, path)
+    snapshot = _read_json(paths.perception_file(repo)) if repo else None
+    if not isinstance(snapshot, dict):
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": _VERIFY_NUDGE}}
+    red = [v for v in snapshot.get("verdicts", []) if isinstance(v, dict) and v.get("ok") is False]
+    if not red:
+        return {}
+    note = "Heads up — background checks currently failing: " + "; ".join(
+        f"{v['id']} ({str(v.get('summary', '')).strip()})" for v in red
+    )
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note[:9000]}}
+
+
+def user_prompt_submit(data: dict) -> dict:
+    """Once per turn, inject a digest of perception changes since the last turn (deltas only).
+
+    Reads the daemon's snapshot and the last-seen marker, emits only what changed (a check went
+    red/recovered, an external branch/HEAD switch, new conflicts), then advances the marker so a
+    standing failure is reported once, not re-nagged. Silent when nothing changed or no snapshot.
+    """
+    _ = data
+    repo = git.repo_root()
+    if not repo:
+        return {}
+    current = _read_json(paths.perception_file(repo))
+    if not isinstance(current, dict):
+        return {}
+    last = _read_json(paths.perception_last_seen_file(repo))
+    lines = _perception_deltas(current, last if isinstance(last, dict) else None)
+    _write_json(paths.perception_last_seen_file(repo), current)  # mark seen regardless, so deltas are per-turn
+    if not lines:
+        return {}
+    digest = (
+        "Repo perception update (since last turn):\n- "
+        + "\n- ".join(lines)
+        + "\nThe harness auto-runs these checks in the background; call repo_state for the full snapshot."
+    )
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": digest[:9000]}}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,9 +213,14 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = sys.argv[1:] if argv is None else argv
     event = args[0] if args else "pre-tool-use"
+    handlers = {
+        "pre-tool-use": pre_tool_use,
+        "post-tool-use": post_tool_use,
+        "user-prompt-submit": user_prompt_submit,
+    }
     try:
         data = json.load(sys.stdin)
-        out = pre_tool_use(data) if event == "pre-tool-use" else post_tool_use(data)
+        out = handlers.get(event, pre_tool_use)(data)
     except Exception:  # noqa: BLE001 — fail-open contract: any error must yield an empty allow
         out = {}
     print(json.dumps(out))

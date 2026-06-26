@@ -41,10 +41,15 @@ def _hook(event: str) -> int:
     Fail-open by contract: any error (bad JSON, missing repo, policy bug) prints an
     empty response and exits 0, so a hook problem never blocks legitimate work.
     """
+    handlers = {
+        "pre-tool-use": agent_hooks.pre_tool_use,
+        "post-tool-use": agent_hooks.post_tool_use,
+        "user-prompt-submit": agent_hooks.user_prompt_submit,
+    }
     try:
         data = json.load(sys.stdin)
-        out = agent_hooks.pre_tool_use(data) if event == "pre-tool-use" else agent_hooks.post_tool_use(data)
-    except Exception:
+        out = handlers.get(event, agent_hooks.pre_tool_use)(data)
+    except Exception:  # noqa: BLE001 — fail-open contract: any hook error must yield an empty allow
         out = {}
     print(json.dumps(out))
     return 0
@@ -175,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         parents=[common],
         help="Claude Code hook handler: read the event JSON on stdin, print the decision (always exits 0)",
     )
-    sp.add_argument("event", choices=["pre-tool-use", "post-tool-use"])
+    sp.add_argument("event", choices=["pre-tool-use", "post-tool-use", "user-prompt-submit"])
     sp = sub.add_parser(
         "prompt",
         parents=[common],

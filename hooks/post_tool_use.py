@@ -1,45 +1,14 @@
 #!/usr/bin/env python3
-"""PostToolUse nudge: after an edit/write, remind the agent to verify the change.
+"""PostToolUse shim: pipe the event through the trusted bundled harness (perception-aware).
 
-Static text, stdlib-only, no harness dependency (not worth a subprocess round-trip).
-Always exits 0.
+The harness's ``agent_hooks.post_tool_use`` records the edited path and surfaces any current
+background-check regression (staying quiet on green, falling back to the static verify nudge
+when no perception snapshot exists yet). Resolution + fail-open live in ``_harness_shim``.
 """
 
 from __future__ import annotations
 
-import json
-import sys
-
-_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-
-_NUDGE = (
-    "A file was modified. Before continuing, verify the change: run repo_verify_changed "
-    "(or agent/tools/safe-diff then agent/tools/test-changed) to check only what changed."
-)
-
-
-def main() -> None:
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        print(json.dumps({}))
-        sys.exit(0)
-
-    if data.get("tool_name", "") in _EDIT_TOOLS:
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PostToolUse",
-                        "additionalContext": _NUDGE,
-                    }
-                }
-            )
-        )
-    else:
-        print(json.dumps({}))
-    sys.exit(0)
-
+from _harness_shim import run
 
 if __name__ == "__main__":
-    main()
+    run("post-tool-use")
