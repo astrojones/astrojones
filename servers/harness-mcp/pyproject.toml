@@ -118,6 +118,8 @@ max-nested-blocks = 5
     "TID251",
     "PLR2004",
     "PLR6301",
+    "PLR0913", # test helpers legitimately take many pytest fixtures
+    "PLR0917",
     "D100",
     "D102",
     "D103",
