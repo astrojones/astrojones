@@ -57,14 +57,14 @@ def _hook(event: str) -> int:
 
 def _deploy_status(limit: int, root: str) -> dict:
     """CLI wrapper for `repo_deploy_status` — list recent deploy runs."""
-    name = deploy.repo_name(Path(root), None)
-    return deploy.status(name, limit)
+    p = Path(root)
+    return deploy.status(p, deploy.repo_name(p, None), limit, deploy.origin_owner(p, None))
 
 
 def _deploy_logs(run_id: str, tail: int, root: str) -> dict:
     """CLI wrapper for `repo_deploy_logs` — fetch failed-step logs of a run."""
-    name = deploy.repo_name(Path(root), None)
-    return deploy.logs(name, run_id, tail)
+    p = Path(root)
+    return deploy.logs(deploy.repo_name(p, None), run_id, tail, deploy.origin_owner(p, None))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -119,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("deploy-validate", parents=[common])
     sp.add_argument("--root", default=None)
     sp.add_argument("--repo", default=None)
+    sp.add_argument("--owner", default=None)
     sp = sub.add_parser("deploy-status", parents=[common])
     sp.add_argument("--limit", type=int, default=5)
     sp = sub.add_parser("deploy-logs", parents=[common])
@@ -239,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         "check-command": lambda: policies.check_command(args.command, root).to_dict(),
         "deploy-validate": lambda: deploy.validate(
             Path(args.root) if args.root else Path(root),
-            args.repo or deploy.repo_name(Path(args.root) if args.root else Path(root), None),
+            deploy.repo_name(Path(args.root) if args.root else Path(root), args.repo),
+            deploy.origin_owner(Path(args.root) if args.root else Path(root), args.owner),
         ),
         "deploy-status": lambda: _deploy_status(args.limit, root),
         "deploy-logs": lambda: _deploy_logs(args.run_id, args.tail, root),

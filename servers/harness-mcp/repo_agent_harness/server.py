@@ -589,6 +589,7 @@ def repo_drift_sync(
 def repo_deploy_validate(
     root: Annotated[str | None, Field(description="Repo root (default: cwd)")] = None,
     repo: Annotated[str | None, Field(description="Repo name override (default: origin URL)")] = None,
+    owner: Annotated[str | None, Field(description="GitHub org override (default: origin URL owner)")] = None,
 ) -> dict:
     """Run the org's hard deploy-rule checks against the current repo.
 
@@ -602,7 +603,8 @@ def repo_deploy_validate(
     rootp = git.repo_root()
     if not rootp:
         return _no_repo()
-    return deploy.validate(Path(rootp), deploy.repo_name(Path(rootp), repo))
+    p = Path(rootp)
+    return deploy.validate(p, deploy.repo_name(p, repo), deploy.origin_owner(p, owner))
 
 
 @mcp.tool()
@@ -618,8 +620,8 @@ def repo_deploy_status(
     rootp = git.repo_root()
     if not rootp:
         return _no_repo()
-    name = deploy.repo_name(Path(rootp), None)
-    return deploy.status(name, limit)
+    p = Path(rootp)
+    return deploy.status(p, deploy.repo_name(p, None), limit, deploy.origin_owner(p, None))
 
 
 @mcp.tool()
@@ -635,8 +637,8 @@ def repo_deploy_logs(
     rootp = git.repo_root()
     if not rootp:
         return _no_repo()
-    name = deploy.repo_name(Path(rootp), None)
-    return deploy.logs(name, run_id, tail)
+    p = Path(rootp)
+    return deploy.logs(deploy.repo_name(p, None), run_id, tail, deploy.origin_owner(p, None))
 
 
 # ----------------------------------------------------------------------- resources
