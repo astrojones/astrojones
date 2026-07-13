@@ -169,6 +169,7 @@ def post_tool_use(data: dict) -> dict:
     path = tin.get("file_path") or tin.get("path") or tin.get("notebook_path") or ""
     if repo and path:
         _record_touched(repo, path)
+        _capture(repo, "post_tool_use", {"tool_name": data.get("tool_name", ""), "path": path})
     snapshot = _read_json(paths.perception_file(repo)) if repo else None
     if not isinstance(snapshot, dict):
         return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": _VERIFY_NUDGE}}
@@ -206,6 +207,36 @@ def user_prompt_submit(data: dict) -> dict:
         + "\nThe harness auto-runs these checks in the background; call repo_state for the full snapshot."
     )
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": digest[:9000]}}
+
+
+def _capture(repo: str, event: str, payload: dict) -> None:
+    """Enqueue a capture row (local sqlite only — never a network call from a hook path).
+
+    Skipped entirely when cognee is unconfigured, so setups without a memory backend never
+    accumulate a queue nobody will ever drain.
+    """
+    if not (os.environ.get("COGNEE_BASE_URL") or "").strip():
+        return
+    with suppress(Exception):  # fail-open: capture must never block or break a turn
+        from repo_agent_harness import capture  # noqa: PLC0415 - lazy, keeps the hot path light
+
+        capture.enqueue(repo, event, payload)
+
+
+def stop(data: dict) -> dict:
+    """Stop hook: enqueue-only (zero synchronous HTTP); the server-side drain ships it later."""
+    repo = git.repo_root()
+    if repo:
+        _capture(repo, "stop", data)
+    return {}
+
+
+def pre_compact(data: dict) -> dict:
+    """PreCompact hook: enqueue-only (zero synchronous HTTP) — capture before context is squashed."""
+    repo = git.repo_root()
+    if repo:
+        _capture(repo, "pre_compact", data)
+    return {}
 
 
 # SessionStart recall: the ONE hook allowed a network call, bounded and fail-open. Every
@@ -262,6 +293,7 @@ def session_start(data: dict, client: CogneeClient | None = None) -> dict:
 
     try:
         from repo_agent_harness import cognee_client, mem  # noqa: PLC0415 - lazy: pulls in httpx
+        from repo_agent_harness.models import MemSearchIn, MemSearchResult  # noqa: PLC0415 - lazy
     except ImportError:
         return {}
     c = client if client is not None else cognee_client.get_client()
@@ -269,15 +301,13 @@ def session_start(data: dict, client: CogneeClient | None = None) -> dict:
         return {}
     name = Path(repo).name
     query = f"Project {name}: recent work, decisions, open threads, and gotchas"
+    inp = MemSearchIn(query=query, search_type="CHUNKS", top_k=_RECALL_TOP_K)
     timeout = float(os.environ.get(_RECALL_TIMEOUT_ENV, _RECALL_TIMEOUT_S))
     try:
-        out = asyncio.run(
-            asyncio.wait_for(mem.search(query, search_type="CHUNKS", top_k=_RECALL_TOP_K, client=c), timeout)
-        )
+        out = asyncio.run(asyncio.wait_for(mem.search(inp, client=c), timeout))
     except Exception:  # noqa: BLE001 - fail-open contract: recall must never break session start
         return {}
-    ok = isinstance(out, dict) and "error" not in out
-    lines = _recall_lines(out.get("results")) if ok else []
+    lines = _recall_lines(out.results) if isinstance(out, MemSearchResult) else []
     if not lines:
         return {}
     ctx = f"Durable-memory recall for {name} (cognee):\n- " + "\n- ".join(lines)
@@ -299,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
         "post-tool-use": post_tool_use,
         "user-prompt-submit": user_prompt_submit,
         "session-start": session_start,
+        "stop": stop,
+        "pre-compact": pre_compact,
     }
     try:
         data = json.load(sys.stdin)

@@ -101,6 +101,89 @@ class MemOntologyIn(BaseModel):
     individuals: dict[str, str] = Field(..., description="Mapping of individual name -> fixed type")
 
 
+# ------------------------------------------------------------------- mem_* results
+
+# What a decoded cognee JSON body may be (transport-level payloads stay loosely typed;
+# everything the harness itself asserts about them is lifted into the typed fields below).
+Json = dict | list | str | int | float | bool | None
+
+
+class MemIngestEstimate(BaseModel):
+    """Cost pre-flight for a bulk ingest."""
+
+    items: int
+    estimated_tokens: int
+    estimated_chunks: int
+    estimated_cost_usd: float
+
+
+class MemError(BaseModel):
+    """Failure result shared by every mem_* operation (the error is the contract)."""
+
+    error: str
+    hint: str | None = None
+    status: int | None = None
+    available: list[str] | None = Field(None, description="known dataset names (unknown-dataset errors)")
+    estimate: MemIngestEstimate | None = Field(None, description="cost estimate (ingest refusals)")
+
+
+class MemSearchResult(BaseModel):
+    """mem_search / mem_rules success result."""
+
+    results: Json
+    search_type: str
+    dataset: str | None = None
+
+
+class MemRememberResult(BaseModel):
+    """mem_remember success result: the fact is stored; extraction continues in background."""
+
+    queued: bool = True
+    dataset: str
+    add_id: str | None = None
+
+
+class MemIngestResult(BaseModel):
+    """mem_ingest outcome: either a dry-run estimate or a completed ship."""
+
+    dataset: str
+    estimate: MemIngestEstimate
+    dry_run: bool = False
+    ingested: int = 0
+    fresh_dataset: bool | None = None
+    serial_first: bool | None = None
+
+
+class MemStatsResult(BaseModel):
+    """mem_stats: dataset existence + pipeline status; graph counts are upstream-unsupported."""
+
+    dataset: str
+    dataset_id: str | None = None
+    status: Json = None
+    node_counts_supported: bool = False
+    hint: str = "cognee exposes no census endpoint; graph counts unavailable upstream"
+
+
+class MemOntologyResult(BaseModel):
+    """mem_ontology: the uploaded (or already-present) ontology and its paired prompt."""
+
+    ontology_key: str
+    uploaded: bool
+    individuals: int
+    types: list[str]
+    prompt: str
+
+
+class MemDoctorResult(BaseModel):
+    """mem_doctor verdict: checkable memory health + competing-capture sentinels."""
+
+    configured: bool
+    reachable: bool = False
+    authenticated: bool = False
+    datasets: list[str] | None = None
+    hints: list[str] = Field(default_factory=list)
+
+
 CheckKind = Literal["lint", "typecheck", "test", "git", "diagnostics", "ci", "command"]
 
 

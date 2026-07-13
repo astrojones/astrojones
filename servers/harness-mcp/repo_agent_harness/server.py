@@ -31,6 +31,8 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit(msg) from exc
 
 from repo_agent_harness import (
+    capture,
+    cognee_client,
     context,
     deploy,
     drift,
@@ -39,6 +41,7 @@ from repo_agent_harness import (
     health,
     impact,
     mem,
+    models,
     perception,
     policies,
     prompts_registry,
@@ -62,6 +65,15 @@ LOG = logging.getLogger(__name__)
 # child Serena attaches to the real project even when the server process started
 # elsewhere (e.g. $HOME in a cloud session, before CLAUDE_PROJECT_DIR/cwd is settled).
 _serena = gateway.SerenaGateway(git.repo_root)
+
+
+async def _cancel(task: asyncio.Task | None) -> None:
+    """Cancel a lifespan background task and await its exit (no-op on None)."""
+    if task is None:
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 @asynccontextmanager
@@ -101,25 +113,24 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     # does not pay the full cold-boot (spawn + LSP start) cost while the UI waits.
     warm_task = _serena.warm() if root else None
     perception_task = asyncio.create_task(perception_daemon.run()) if perception_daemon else None
+    # Capture drain: ship hook-enqueued rows to cognee in-process. Only when configured —
+    # without a remote there is nothing to drain into (and hooks don't enqueue either).
+    cognee = cognee_client.get_client()
+    brain = capture.BrainCapture(root, cognee) if root and cognee.configured else None
+    brain_task = asyncio.create_task(brain.run()) if brain else None
     try:
         yield {}
     finally:
-        if warm_task is not None:
-            warm_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await warm_task
+        await _cancel(warm_task)
         if perception_daemon is not None:
             perception_daemon.stop()
-        if perception_task is not None:
-            perception_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await perception_task
+        await _cancel(perception_task)
         if repo_watcher is not None:
             repo_watcher.stop()
-        if watch_task is not None:
-            watch_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await watch_task
+        await _cancel(watch_task)
+        if brain is not None:
+            brain.stop()
+        await _cancel(brain_task)
         with suppress(RuntimeError):  # defensive: the child dies with our stdio anyway
             await _serena.aclose()
 
@@ -649,17 +660,9 @@ def repo_deploy_logs(
 
 
 @mcp.tool()
-async def mem_search(
-    query: Annotated[str, Field(description="Natural-language query against the memory graph")],
-    search_type: Annotated[
-        str,
-        Field(description="GRAPH_COMPLETION (default), CHUNKS, TEMPORAL, or CODING_RULES"),
-    ] = "GRAPH_COMPLETION",
-    dataset: Annotated[str | None, Field(description="Dataset name; None = default scope")] = None,
-    top_k: Annotated[int, Field(ge=1, le=50)] = 10,
-) -> dict:
+async def mem_search(inp: models.MemSearchIn) -> dict:
     """Recall from the durable memory graph (remote cognee)."""
-    return await mem.search(query, search_type, dataset, top_k)
+    return (await mem.search(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
@@ -668,52 +671,37 @@ async def mem_rules(
     top_k: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> dict:
     """Retrieve distilled coding rules from memory (CODING_RULES search)."""
-    return await mem.rules(query, top_k)
+    return (await mem.rules(query, top_k)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_remember(
-    text: Annotated[str, Field(description="The fact/observation to store durably")],
-    dataset: Annotated[str, Field(description="Target dataset name")] = "agent_sessions",
-    node_set: Annotated[list[str] | None, Field(description="Category tags, e.g. ['project_docs']")] = None,
-    metadata: Annotated[dict | None, Field(description="Optional key/value context folded into the text")] = None,
-) -> dict:
+async def mem_remember(inp: models.MemRememberIn) -> dict:
     """Store one fact durably: fast /add, then background /cognify (never blocks on extraction)."""
-    return await mem.remember(text, dataset, node_set, metadata)
+    return (await mem.remember(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_ingest(
-    items: Annotated[list[str], Field(description="Curated documents to ingest")],
-    dataset: Annotated[str, Field(description="Target dataset name")],
-    node_set: Annotated[list[str] | None, Field(description="Category tags applied to every item")] = None,
-    dry_run: Annotated[bool, Field(description="Only return the cost estimate; write nothing")] = False,
-    confirm: Annotated[bool, Field(description="Accept an over-limit estimated cost")] = False,
-) -> dict:
+async def mem_ingest(inp: models.MemIngestIn) -> dict:
     """Bulk-ingest curated items — cost-gated (refuses expensive runs unless confirm=true)."""
-    return await mem.ingest(items, dataset, node_set=node_set, dry_run=dry_run, confirm=confirm)
+    return (await mem.ingest(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_stats(
-    dataset: Annotated[str, Field(description="Dataset name to report on")],
-) -> dict:
+async def mem_stats(inp: models.MemStatsIn) -> dict:
     """Best-effort dataset stats (existence, pipeline status); honest about unsupported counts."""
-    return await mem.stats(dataset)
+    return (await mem.stats(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_ontology(
-    individuals: Annotated[dict[str, str], Field(description="Mapping of individual name -> fixed type")],
-) -> dict:
+async def mem_ontology(inp: models.MemOntologyIn) -> dict:
     """Generate + idempotently upload a NamedIndividual ontology; returns the paired extraction prompt."""
-    return await mem.ontology(individuals)
+    return (await mem.ontology(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
 async def mem_doctor() -> dict:
     """Cognee memory health: configured/reachable/authenticated + competing-capture sentinels."""
-    return await mem.doctor()
+    return (await mem.doctor()).model_dump(exclude_none=True)
 
 
 # ----------------------------------------------------------------------- resources
