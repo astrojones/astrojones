@@ -47,6 +47,7 @@ from repo_agent_harness import (
     prompts_registry,
     scaffold,
     serena_gate,
+    symbols,
     verify,
     watcher,
 )
@@ -145,10 +146,11 @@ Read/Grep of code, then navigate by symbol. (Skip only for pure non-code chores.
 **If it reports the project is not onboarded, run `serena_onboarding` and complete it** (write
 the project memories it asks for) — a one-time per-repo step — before deep work.
 
-- Navigate by symbol: serena_* (find_symbol, find_referencing_symbols, get_symbols_overview)
-  for code; repo_search_*/repo_read_range for files. Read precise ranges; never dump whole
-  files or recursively read the tree. Native Read/Grep are a fallback ONLY when Serena cannot
-  answer (non-code files, not-yet-indexed) — never for code discovery.
+- Orient in code via repo_symbols_overview (static tree-sitter index — instant, no LSP);
+  use serena_* for the semantic ops the index cannot answer (find_referencing_symbols,
+  find_implementations, diagnostics, renames) and repo_search_*/repo_read_range for files.
+  Read precise ranges; never dump whole files or recursively read the tree. Native
+  Read/Grep are a fallback ONLY when neither can answer — never for code discovery.
 - Call repo_context_overview to orient (languages, entrypoints, important paths).
 - In Claude Code, to map an unfamiliar or multi-file region dispatch the `explorer`
   subagent — it runs this same serena+harness navigation read-only and returns a cited
@@ -401,6 +403,18 @@ def repo_read_range(
         return _no_repo()
     gated = _serena_read_gate(root, path)
     return gated if gated is not None else context.read_range(root, path, start_line, end_line)
+
+
+@mcp.tool()
+def repo_symbols_overview(inp: symbols.SymbolsOverviewIn) -> dict:
+    """Symbol map from the static tree-sitter index — no Serena launch, always current.
+
+    The preferred first move for code orientation: names, kinds, spans, and nesting per
+    file (optionally scoped to a path prefix). Reserve serena_* for the semantic questions
+    the index cannot answer — references, implementations, diagnostics, renames.
+    """
+    root = git.repo_root()
+    return symbols.overview(root, inp).model_dump(exclude_none=True) if root else _no_repo()
 
 
 @mcp.tool()

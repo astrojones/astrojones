@@ -34,6 +34,7 @@ description: >-
 model: inherit
 color: cyan
 tools:
+  - mcp__plugin_astrojones_repo-agent-harness__repo_symbols_overview
   - mcp__plugin_astrojones_repo-agent-harness__serena_get_symbols_overview
   - mcp__plugin_astrojones_repo-agent-harness__serena_find_symbol
   - mcp__plugin_astrojones_repo-agent-harness__serena_find_referencing_symbols
@@ -84,8 +85,8 @@ Serena-first navigation and the `Read`-until-onboarded gate are enforced globall
 ## Method — wide and shallow
 
 1. **Orient.** `repo_context_overview` + `repo_context_relevant_files` to find candidate regions; `repo_search_text` / `repo_search_files` for specific terms.
-2. **Name the symbols.** `serena_get_symbols_overview` (collapsed tree — top-level signatures only) then `serena_find_symbol` to name the actual symbols. Read **signatures, not bodies** — the collapsed tree and `depth` give you child signatures without their bodies.
-3. **Map the blast radius.** `serena_find_referencing_symbols` on the 1–2 pivot symbols gives you callers/dependents — that IS the blast radius. `serena_find_declaration` / `serena_find_implementations` resolve indirection. Run `repo_impact_file` on the likely targets for a file-level ripple read.
+2. **Name the symbols — static index FIRST.** `repo_symbols_overview` (path-scoped) is your primary symbol map: names, kinds, spans, and nesting from the tree-sitter index, instant and with no LSP launch. Reach for `serena_get_symbols_overview` / `serena_find_symbol` only when the index can't answer (typed signatures, name-path lookup). Read **signatures, not bodies**.
+3. **Map the blast radius.** `serena_find_referencing_symbols` on the 1–2 pivot symbols gives you callers/dependents — that IS the blast radius (this is Serena's job; the static index has no call graph). `serena_find_declaration` / `serena_find_implementations` resolve indirection. Run `repo_impact_file` on the likely targets for a file-level ripple read.
 4. **Confirm, don't deep-read.** Use a narrow `repo_read_range` (or a single `serena_find_symbol` with `include_body`) only to confirm a symbol is the relevant one — a quick check, not a study. Reading the bodies to understand *how they work* is the architect's job; leave it for them. Never dump a whole file.
 
 **Boundary vs `architect`:** you map *what* is relevant and *what it touches*; `architect` reads those bodies and designs *how* to change them. **Boundary vs `implementer`:** `implementer` owns the change — it makes symbol edits and runs a full TDD stream. You only locate; when you find a change to make, report it, you do not make it.

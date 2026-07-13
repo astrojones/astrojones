@@ -45,6 +45,7 @@ description: |
 model: inherit
 color: blue
 tools:
+  - mcp__plugin_astrojones_repo-agent-harness__repo_symbols_overview
   - mcp__plugin_astrojones_repo-agent-harness__serena_get_symbols_overview
   - mcp__plugin_astrojones_repo-agent-harness__serena_find_symbol
   - mcp__plugin_astrojones_repo-agent-harness__serena_find_referencing_symbols
@@ -81,7 +82,7 @@ If you are dispatched **with** an `explorer` symbol map, start from it — the r
 
 ## Tools
 
-Use the collapsed tree to **navigate**, then **read the bodies you need**: `serena_get_symbols_overview` (top-level signatures) to find the symbols, then `serena_find_symbol` with `include_body: true` to read them — expand every symbol on the design's critical path, not just one. Use narrow `repo_read_range` for non-symbol regions (config, templates). Trace and extend edges with `serena_find_referencing_symbols`, `serena_find_declaration`, `serena_find_implementations` — that is how you confirm and extend the blast radius, not text search.
+Navigate from the static index, then **read the bodies you need**: `repo_symbols_overview` (path-scoped, instant, no LSP launch) to see names/kinds/nesting, `serena_get_symbols_overview` when you need typed signatures, then `serena_find_symbol` with `include_body: true` to read them — expand every symbol on the design's critical path, not just one. Use narrow `repo_read_range` for non-symbol regions (config, templates). Trace and extend edges with `serena_find_referencing_symbols`, `serena_find_declaration`, `serena_find_implementations` — that is how you confirm and extend the blast radius, not text search.
 
 There is **no hard cap** on bodies you may read — your job is to understand the code well enough to design it correctly. Read narrowly (by symbol, not whole files) but read deeply.
 
