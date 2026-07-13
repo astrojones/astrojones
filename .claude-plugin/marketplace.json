@@ -1,0 +1,26 @@
+{
+  "name": "astrojones-dev",
+  "owner": {
+    "name": "astrojones",
+    "url": "https://github.com/astrojones"
+  },
+  "metadata": {
+    "description": "Self-hosting marketplace for developing the astrojones plugin from this repo's working-copy HEAD. Register it as a local marketplace and enable astrojones@astrojones-dev to run the local source instead of the released version."
+  },
+  "plugins": [
+    {
+      "name": "astrojones",
+      "source": "./",
+      "category": "developer-tools",
+      "keywords": [
+        "harness",
+        "mcp",
+        "serena",
+        "coding-agent",
+        "safety",
+        "code-navigation"
+      ],
+      "description": "The repo agent harness as a Claude Code plugin, loaded from local HEAD: a bundled, auto-connecting MCP server (repo_* tools + proxied serena_* code navigation), safety hooks, and coding-workflow skills and subagents. Local dev build of the astrojones plugin."
+    }
+  ]
+}
