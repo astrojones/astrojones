@@ -89,3 +89,36 @@ def test_deleted_file_drops_from_index(repo):
     subprocess.run(["git", "rm", "-q", "src/util.py"], cwd=repo, check=True, capture_output=True)
     out = symbols.overview(str(repo), SymbolsOverviewIn())
     assert "src/util.py" not in out.symbols
+
+
+def test_python_docstring_first_line_is_indexed(repo):
+    _commit_file(
+        repo,
+        "src/documented.py",
+        '''def greet():
+    """Say hello to the world.
+
+    Longer explanation that must not be captured.
+    """
+    return "hi"
+
+
+class Widget:
+    """A small UI widget."""
+
+    def render(self):
+        return None
+''',
+    )
+    out = symbols.overview(str(repo), SymbolsOverviewIn())
+    docs = {(s.name, s.parent): s.doc for s in out.symbols["src/documented.py"]}
+    assert docs["greet", None] == "Say hello to the world."
+    assert docs["Widget", None] == "A small UI widget."
+    # A method with no docstring yields None.
+    assert docs["render", "Widget"] is None
+
+
+def test_symbol_without_docstring_has_none_doc(repo):
+    # The fixture's charge() has no docstring.
+    records = symbols.parse_file(str(repo), "src/payment.py")
+    assert {r.name: r.doc for r in records} == {"charge": None}

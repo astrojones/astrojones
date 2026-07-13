@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 _INDEX_NAME = "symbols.json"
-_INDEX_VERSION = 2  # bump to self-heal indexes poisoned by a bad parser (e.g. the tree-sitter 0.26 ABI break)
+_INDEX_VERSION = 3  # bump to self-heal indexes poisoned by a bad parser (e.g. the tree-sitter 0.26 ABI break)
 _GIT_TIMEOUT_S = 10
 _PARSE_MAX_BYTES = 1_000_000  # a tracked source file beyond 1MB is generated; skip it
 
@@ -75,6 +75,7 @@ class SymbolRecord(BaseModel):
     start_line: int = Field(..., description="1-based first line of the symbol body")
     end_line: int = Field(..., description="1-based last line of the symbol body")
     parent: str | None = Field(None, description="enclosing symbol name (e.g. a method's class)")
+    doc: str | None = Field(None, description="first line of the symbol's docstring, if any")
 
 
 class FileSymbols(BaseModel):
@@ -134,7 +135,23 @@ def _symbol_name(node: Node) -> str | None:
     return name.text.decode("utf-8", errors="replace") if name is not None and name.text else None
 
 
-def _walk(node: Node, kinds: dict[str, str], parent: str | None, out: list[SymbolRecord]) -> None:
+def _docstring(node: Node, lang: str) -> str | None:
+    """First non-empty line of the symbol's docstring (Python only), truncated to 120 chars."""
+    if lang != "python":
+        return None
+    body = node.child_by_field_name("body")
+    first = next((c for c in body.children if c.type != "comment"), None) if body else None
+    # The docstring node is a `string` — either directly (newer grammar) or wrapped in an
+    # `expression_statement` (older grammar). Anything else means no docstring.
+    string = first.children[0] if first and first.type == "expression_statement" and first.children else first
+    if string is None or string.type != "string":
+        return None
+    content = next((c for c in string.children if c.type == "string_content"), None)
+    text = content.text.decode("utf-8", errors="replace") if content is not None and content.text else ""
+    return next((s[:120] for line in text.splitlines() if (s := line.strip())), None)
+
+
+def _walk(node: Node, kinds: dict[str, str], lang: str, parent: str | None, out: list[SymbolRecord]) -> None:
     next_parent = parent
     if node.type in kinds:
         name = _symbol_name(node)
@@ -146,11 +163,12 @@ def _walk(node: Node, kinds: dict[str, str], parent: str | None, out: list[Symbo
                     start_line=node.start_point.row + 1,
                     end_line=node.end_point.row + 1,
                     parent=parent,
+                    doc=_docstring(node, lang),
                 )
             )
             next_parent = name
     for child in node.children:
-        _walk(child, kinds, next_parent, out)
+        _walk(child, kinds, lang, next_parent, out)
 
 
 def parse_file(root: str, rel_path: str) -> list[SymbolRecord]:
@@ -167,7 +185,7 @@ def parse_file(root: str, rel_path: str) -> list[SymbolRecord]:
     from tree_sitter_language_pack import get_parser  # noqa: PLC0415 - lazy: ~100ms import, only when indexing
 
     out: list[SymbolRecord] = []
-    _walk(get_parser(lang).parse(data).root_node, _KINDS_BY_LANG[lang], None, out)
+    _walk(get_parser(lang).parse(data).root_node, _KINDS_BY_LANG[lang], lang, None, out)
     return out
 
 
