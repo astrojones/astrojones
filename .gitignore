@@ -17,3 +17,6 @@ uv.lock
 # self-bootstrap artifacts (harness regenerates these on connect; AGENTS.md is tracked)
 agent/
 .opencode/
+
+# secrets — never commit
+.env

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 _INDEX_NAME = "symbols.json"
+_INDEX_VERSION = 2  # bump to self-heal indexes poisoned by a bad parser (e.g. the tree-sitter 0.26 ABI break)
 _GIT_TIMEOUT_S = 10
 _PARSE_MAX_BYTES = 1_000_000  # a tracked source file beyond 1MB is generated; skip it
 
@@ -86,7 +87,7 @@ class FileSymbols(BaseModel):
 class SymbolIndex(BaseModel):
     """The persisted per-worktree index."""
 
-    version: int = 1
+    version: int = _INDEX_VERSION
     generated_at: float = 0
     files: dict[str, FileSymbols] = Field(default_factory=dict)
 
@@ -172,9 +173,10 @@ def parse_file(root: str, rel_path: str) -> list[SymbolRecord]:
 
 def _load(root: str) -> SymbolIndex:
     try:
-        return SymbolIndex.model_validate_json(_index_file(root).read_text(encoding="utf-8"))
+        index = SymbolIndex.model_validate_json(_index_file(root).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return SymbolIndex()
+    return index if index.version == _INDEX_VERSION else SymbolIndex()
 
 
 def _store(root: str, index: SymbolIndex) -> None:
