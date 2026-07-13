@@ -1,0 +1,12 @@
+# Keep the build context lean — exclude host-side state and caches that should
+# never enter the clean-room image (the image rebuilds the venv itself).
+.git
+**/.venv
+**/.uv
+**/__pycache__
+**/*.pyc
+**/node_modules
+# NEVER bake the host's secrets into the image — the OAuth token is injected at runtime.
+.env
+.env.*
+.claude/settings.json
