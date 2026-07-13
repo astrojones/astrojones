@@ -16,9 +16,8 @@ prefixing ``uv run`` when the tool is not on the global PATH but ``uv`` is.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from repo_agent_harness import shell
 
