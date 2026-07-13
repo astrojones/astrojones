@@ -61,6 +61,46 @@ class CheckCommandIn(BaseModel):
     command: str = Field(..., description="The shell command to evaluate against policy")
 
 
+class MemSearchIn(BaseModel):
+    """Input model for mem_search."""
+
+    query: str = Field(..., description="Natural-language query against the memory graph")
+    search_type: Literal["GRAPH_COMPLETION", "CHUNKS", "TEMPORAL", "CODING_RULES"] = "GRAPH_COMPLETION"
+    dataset: str | None = Field(None, description="Dataset name; None = the user's default scope")
+    top_k: int = Field(10, ge=1, le=50)
+
+
+class MemRememberIn(BaseModel):
+    """Input model for mem_remember."""
+
+    text: str = Field(..., description="The fact/observation to store durably")
+    dataset: str = Field("agent_sessions", description="Target dataset name")
+    node_set: list[str] | None = Field(None, description="Category tags, e.g. ['project_docs']")
+    metadata: dict | None = Field(None, description="Optional key/value context folded into the text")
+
+
+class MemIngestIn(BaseModel):
+    """Input model for mem_ingest."""
+
+    items: list[str] = Field(..., description="Curated documents to ingest")
+    dataset: str = Field(..., description="Target dataset name")
+    node_set: list[str] | None = Field(None, description="Category tags applied to every item")
+    dry_run: bool = Field(False, description="Only return the cost estimate; write nothing")
+    confirm: bool = Field(False, description="Accept an over-limit estimated cost")
+
+
+class MemStatsIn(BaseModel):
+    """Input model for mem_stats."""
+
+    dataset: str = Field(..., description="Dataset name to report on")
+
+
+class MemOntologyIn(BaseModel):
+    """Input model for mem_ontology."""
+
+    individuals: dict[str, str] = Field(..., description="Mapping of individual name -> fixed type")
+
+
 CheckKind = Literal["lint", "typecheck", "test", "git", "diagnostics", "ci", "command"]
 
 

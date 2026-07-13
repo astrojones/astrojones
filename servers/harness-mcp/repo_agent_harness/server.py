@@ -38,6 +38,7 @@ from repo_agent_harness import (
     git,
     health,
     impact,
+    mem,
     perception,
     policies,
     prompts_registry,
@@ -145,6 +146,9 @@ the project memories it asks for) — a one-time per-repo step — before deep w
 - Workflow playbooks (bugfix, feature, refactor, test, implement, commit) are served as
   MCP prompts and via repo_prompt_get(name); the implement pipeline coordinates the
   implementer/reviewer/test-runner subagents.
+- Durable memory lives in the remote cognee graph via the mem_* tools: mem_search /
+  mem_rules to recall, mem_remember for single facts, mem_ingest for curated bulk loads
+  (cost-gated), mem_ontology to pin the type vocabulary, mem_doctor when memory misbehaves.
 - Run repo_verify_changed on the files you changed before declaring work done.
 - Shell is policy-bounded: destructive commands and secret-file reads are blocked; git
   push and database migrations need confirmation. Check repo_policy_check_command if unsure.
@@ -639,6 +643,77 @@ def repo_deploy_logs(
         return _no_repo()
     p = Path(rootp)
     return deploy.logs(deploy.repo_name(p, None), run_id, tail, deploy.origin_owner(p, None))
+
+
+# ----------------------------------------------------------------- durable memory (cognee)
+
+
+@mcp.tool()
+async def mem_search(
+    query: Annotated[str, Field(description="Natural-language query against the memory graph")],
+    search_type: Annotated[
+        str,
+        Field(description="GRAPH_COMPLETION (default), CHUNKS, TEMPORAL, or CODING_RULES"),
+    ] = "GRAPH_COMPLETION",
+    dataset: Annotated[str | None, Field(description="Dataset name; None = default scope")] = None,
+    top_k: Annotated[int, Field(ge=1, le=50)] = 10,
+) -> dict:
+    """Recall from the durable memory graph (remote cognee)."""
+    return await mem.search(query, search_type, dataset, top_k)
+
+
+@mcp.tool()
+async def mem_rules(
+    query: Annotated[str, Field(description="What rules to retrieve, e.g. 'python error handling'")],
+    top_k: Annotated[int, Field(ge=1, le=50)] = 10,
+) -> dict:
+    """Retrieve distilled coding rules from memory (CODING_RULES search)."""
+    return await mem.rules(query, top_k)
+
+
+@mcp.tool()
+async def mem_remember(
+    text: Annotated[str, Field(description="The fact/observation to store durably")],
+    dataset: Annotated[str, Field(description="Target dataset name")] = "agent_sessions",
+    node_set: Annotated[list[str] | None, Field(description="Category tags, e.g. ['project_docs']")] = None,
+    metadata: Annotated[dict | None, Field(description="Optional key/value context folded into the text")] = None,
+) -> dict:
+    """Store one fact durably: fast /add, then background /cognify (never blocks on extraction)."""
+    return await mem.remember(text, dataset, node_set, metadata)
+
+
+@mcp.tool()
+async def mem_ingest(
+    items: Annotated[list[str], Field(description="Curated documents to ingest")],
+    dataset: Annotated[str, Field(description="Target dataset name")],
+    node_set: Annotated[list[str] | None, Field(description="Category tags applied to every item")] = None,
+    dry_run: Annotated[bool, Field(description="Only return the cost estimate; write nothing")] = False,
+    confirm: Annotated[bool, Field(description="Accept an over-limit estimated cost")] = False,
+) -> dict:
+    """Bulk-ingest curated items — cost-gated (refuses expensive runs unless confirm=true)."""
+    return await mem.ingest(items, dataset, node_set=node_set, dry_run=dry_run, confirm=confirm)
+
+
+@mcp.tool()
+async def mem_stats(
+    dataset: Annotated[str, Field(description="Dataset name to report on")],
+) -> dict:
+    """Best-effort dataset stats (existence, pipeline status); honest about unsupported counts."""
+    return await mem.stats(dataset)
+
+
+@mcp.tool()
+async def mem_ontology(
+    individuals: Annotated[dict[str, str], Field(description="Mapping of individual name -> fixed type")],
+) -> dict:
+    """Generate + idempotently upload a NamedIndividual ontology; returns the paired extraction prompt."""
+    return await mem.ontology(individuals)
+
+
+@mcp.tool()
+async def mem_doctor() -> dict:
+    """Cognee memory health: configured/reachable/authenticated + competing-capture sentinels."""
+    return await mem.doctor()
 
 
 # ----------------------------------------------------------------------- resources
