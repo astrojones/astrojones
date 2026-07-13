@@ -157,7 +157,7 @@ async def test_ingest_existing_dataset_skips_serial_first():
 
 
 async def test_ingest_binds_pinned_ontology_key_to_cognify():
-    """A non-dry-run ingest threads ontology_key into every cognify payload as ``ontologyKey``."""
+    """A non-dry-run ingest threads ontology_key into every cognify payload as ``ontology_key`` (a list)."""
     fake = FakeCognee(datasets=["other"])
     inp = MemIngestIn(
         items=["doc-a", "doc-b"],
@@ -169,17 +169,43 @@ async def test_ingest_binds_pinned_ontology_key_to_cognify():
     assert isinstance(out, MemIngestResult)
     cognifies = [p for m, path, p in fake.requests if path == "/api/v1/cognify"]
     assert cognifies
-    assert all(p["ontologyKey"] == "harness-abc" for p in cognifies)
+    assert all(p["ontology_key"] == ["harness-abc"] for p in cognifies)
 
 
 async def test_ingest_without_ontology_key_omits_it():
-    """Omitting ontology_key leaves no ``ontologyKey`` in the cognify payload."""
+    """Omitting ontology_key leaves no ``ontology_key`` in the cognify payload."""
     fake = FakeCognee(datasets=["docs"])
     out = await mem.ingest(MemIngestIn(items=["a", "b"], dataset="docs"), client=_wired(fake))
     assert isinstance(out, MemIngestResult)
     cognifies = [p for m, path, p in fake.requests if path == "/api/v1/cognify"]
     assert cognifies
-    assert all("ontologyKey" not in p for p in cognifies)
+    assert all("ontology_key" not in p and "ontologyKey" not in p for p in cognifies)
+
+
+async def test_ontology_exists_checks_the_listing_for_membership(monkeypatch):
+    """``ontology_exists`` lists ``GET /api/v1/ontologies`` (a dict) and checks key membership."""
+    client = _wired(FakeCognee())
+    calls: list[tuple[str, str]] = []
+
+    async def fake_request(method, path, *, idempotent=False, **kwargs):
+        calls.append((method, path))
+        return {"harness-abc": {"description": "pinned"}}
+
+    monkeypatch.setattr(client, "request", fake_request)
+    assert await client.ontology_exists("harness-abc") is True
+    assert await client.ontology_exists("missing") is False
+    assert calls == [("GET", "/api/v1/ontologies"), ("GET", "/api/v1/ontologies")]
+
+
+async def test_ontology_exists_is_defensive_about_non_dict_listings(monkeypatch):
+    """A non-dict/empty listing response means the key is simply absent, not an error."""
+    client = _wired(FakeCognee())
+
+    async def empty_request(method, path, *, idempotent=False, **kwargs):
+        return None
+
+    monkeypatch.setattr(client, "request", empty_request)
+    assert await client.ontology_exists("harness-abc") is False
 
 
 async def test_ingest_empty_items_is_an_error():
@@ -236,7 +262,7 @@ async def test_ontology_uploads_once_then_is_idempotent():
     assert not isinstance(second, MemError)
     assert second.uploaded is False
     assert second.ontology_key == first.ontology_key
-    uploads = [p for m, path, p in fake.requests if path == "/api/v1/ontologies"]
+    uploads = [p for m, path, p in fake.requests if path == "/api/v1/ontologies" and m == "POST"]
     assert len(uploads) == 1
 
 

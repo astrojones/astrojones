@@ -353,18 +353,17 @@ class CogneeClient:
         if chunks_per_batch is not None:
             payload["chunksPerBatch"] = chunks_per_batch
         if ontology_key is not None:
-            payload["ontologyKey"] = ontology_key
+            payload["ontology_key"] = [ontology_key]
         return await self.request("POST", "/api/v1/cognify", json=payload)
 
     async def ontology_exists(self, key: str) -> bool:
-        """Whether ``/api/v1/ontologies/{key}`` is already uploaded (the idempotency check)."""
-        try:
-            await self.request("GET", f"/api/v1/ontologies/{key}", idempotent=True)
-        except CogneeError as exc:
-            if exc.status == HTTPStatus.NOT_FOUND:
-                return False
-            raise
-        return True
+        """Whether ``key`` is present in ``GET /api/v1/ontologies`` (the idempotency check).
+
+        The listing endpoint returns a dict mapping each ontology_key to its metadata;
+        a non-dict/empty response defensively means the key is simply absent.
+        """
+        listing = await self.request("GET", "/api/v1/ontologies", idempotent=True)
+        return isinstance(listing, dict) and key in listing
 
     async def upload_ontology(self, key: str, xml: str, description: str | None = None) -> Json:
         """POST /api/v1/ontologies (multipart, keyed — the server dedupes by ontology_key)."""

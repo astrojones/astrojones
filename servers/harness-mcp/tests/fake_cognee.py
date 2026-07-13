@@ -107,12 +107,10 @@ class FakeCognee:
             payload = json.loads(request.content)
             self._record(request, payload)
             return httpx.Response(200, json={"status": "ok"})
-        if path.startswith("/api/v1/ontologies/"):
-            key = path.rsplit("/", 1)[-1]
-            self._record(request, {"key": key})
-            if key in self.ontologies:
-                return httpx.Response(200, json={"ontology_key": key})
-            return httpx.Response(404, json={"detail": "not found"})
+        if path == "/api/v1/ontologies" and request.method == "GET":
+            # The live collection endpoint returns a dict keyed by ontology_key.
+            self._record(request, {})
+            return httpx.Response(200, json={k: {"ontology_key": k} for k in self.ontologies})
         if path == "/api/v1/ontologies" and request.method == "POST":
             payload = self._form_payload(request)
             self._record(request, payload)
