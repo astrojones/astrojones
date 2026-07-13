@@ -16,6 +16,9 @@ def test_server_instructions_present():
     assert "explorer" in text
     # Materialization is opt-in, surfaced here so the model knows the lever exists.
     assert "repo_bootstrap" in text
+    # Onboarding is now automatic at connect: the old mandatory "FIRST action is
+    # serena_initial_instructions" directive is gone (it wrongly implied a manual first step).
+    assert "FIRST action" not in text
 
 
 def test_tool_functions_callable(repo, monkeypatch):
@@ -84,15 +87,15 @@ def test_read_range_env_escape_allows_code(repo, monkeypatch):
 
 
 def test_autoseed_onboards_fresh_repo(repo, monkeypatch):
-    """Auto-seed writes a project_overview memory so a fresh repo is onboarded before the agent acts."""
+    """Auto-seed writes a cheap stub memory so a fresh repo is onboarded before the agent acts."""
     monkeypatch.chdir(repo)
     assert not server.serena_gate.is_onboarded(repo)
     server._autoseed_onboarding(str(repo))
     mem = repo / ".serena" / "memories" / "project_overview.md"
     assert mem.is_file()
     assert server.serena_gate.is_onboarded(repo)
-    # the seeded memory is portable: no absolute paths committed
-    assert str(repo) not in mem.read_text()
+    # the seed is a constant stub, not a rendered context overview
+    assert mem.read_text() == server._ONBOARD_STUB
 
 
 def test_autoseed_is_idempotent_and_preserves_existing(repo, monkeypatch):
@@ -115,6 +118,23 @@ def test_autoseed_skips_when_gate_disabled(repo, monkeypatch):
 
 def test_autoseed_noop_outside_repo():
     server._autoseed_onboarding(None)  # must not raise
+
+
+def test_repo_onboard_complete_marks_onboarded(repo, monkeypatch):
+    """Confirming an ingest marks the repo onboarded in cognee state."""
+    monkeypatch.chdir(repo)
+    assert not server.paths.is_cognee_onboarded(str(repo))
+    out = server.repo_onboard_complete("proj_dataset", ontology_key="default")
+    assert out["ok"] is True
+    assert out["onboarded"] is True
+    assert out["dataset"] == "proj_dataset"
+    assert server.paths.is_cognee_onboarded(str(repo))
+
+
+def test_repo_onboard_complete_noop_outside_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = server.repo_onboard_complete("proj_dataset")
+    assert "error" in out
 
 
 def test_seed_serena_languages_writes_all_present(repo, monkeypatch):
