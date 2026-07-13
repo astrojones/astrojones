@@ -45,6 +45,7 @@ def _hook(event: str) -> int:
         "pre-tool-use": agent_hooks.pre_tool_use,
         "post-tool-use": agent_hooks.post_tool_use,
         "user-prompt-submit": agent_hooks.user_prompt_submit,
+        "session-start": agent_hooks.session_start,
     }
     try:
         data = json.load(sys.stdin)
@@ -181,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         parents=[common],
         help="Claude Code hook handler: read the event JSON on stdin, print the decision (always exits 0)",
     )
-    sp.add_argument("event", choices=["pre-tool-use", "post-tool-use", "user-prompt-submit"])
+    sp.add_argument("event", choices=["pre-tool-use", "post-tool-use", "user-prompt-submit", "session-start"])
     sp = sub.add_parser(
         "prompt",
         parents=[common],

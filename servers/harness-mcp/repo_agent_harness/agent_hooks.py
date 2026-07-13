@@ -11,11 +11,16 @@ blocks legitimate work.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from contextlib import suppress
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from repo_agent_harness import git, paths, policies, secrets, serena_gate
+
+if TYPE_CHECKING:
+    from repo_agent_harness.cognee_client import CogneeClient
 
 _GUARDED_FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit"}
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -203,6 +208,82 @@ def user_prompt_submit(data: dict) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": digest[:9000]}}
 
 
+# SessionStart recall: the ONE hook allowed a network call, bounded and fail-open. Every
+# other hook stays enqueue-only/local by hard rule — a turn must never block on cognee.
+_RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
+# Once per session, so a few seconds is acceptable; a live remote roundtrip (TLS + login +
+# CHUNKS retrieval) measures ~3s cold, hence 5s rather than a knife's-edge 3.
+_RECALL_TIMEOUT_S = 5.0
+_RECALL_TOP_K = 5
+_RECALL_LINE_CHARS = 300
+_RECALL_MAX_LINES = 8
+
+
+def _recall_lines(results: object) -> list[str]:
+    """Flatten a mem_search result payload into displayable lines (shape-tolerant).
+
+    Handles the live shapes: a list of per-dataset dicts whose ``search_result`` holds
+    either strings (completion answers) or chunk records with a ``text`` field.
+    """
+    if isinstance(results, str):
+        return [results.strip()] if results.strip() else []
+    raw: list[object] = []
+    if isinstance(results, list):
+        for r in results:
+            if isinstance(r, dict):
+                sr = r.get("search_result") or r.get("text")
+                raw.extend(sr if isinstance(sr, list) else [sr])
+            else:
+                raw.append(r)
+    lines: list[str] = []
+    for item in raw:
+        text = item.get("text") if isinstance(item, dict) else item
+        line = " ".join(str(text).split()) if text else ""
+        if line:
+            lines.append(line[:_RECALL_LINE_CHARS])
+    return lines[:_RECALL_MAX_LINES]
+
+
+def session_start(data: dict, client: CogneeClient | None = None) -> dict:
+    """Inject a bounded durable-memory recall at session start (fail-open, silent on trouble).
+
+    Absorbs the cognee-memory plugin's recall role: one CHUNKS ``mem_search`` (pure
+    retrieval — a GRAPH_COMPLETION would spend the whole budget inside the server's LLM)
+    against the remote graph, hard-bounded (default 5s,
+    ``REPO_AGENT_HARNESS_RECALL_TIMEOUT_S``), yielding ``additionalContext`` — or ``{}`` on
+    timeout, unreachable/unconfigured cognee, or any error. A memory problem must never
+    delay or break session startup.
+    """
+    _ = data
+    repo = git.repo_root()
+    if not repo:
+        return {}
+    import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
+
+    try:
+        from repo_agent_harness import cognee_client, mem  # noqa: PLC0415 - lazy: pulls in httpx
+    except ImportError:
+        return {}
+    c = client if client is not None else cognee_client.get_client()
+    if not c.configured:
+        return {}
+    name = Path(repo).name
+    query = f"Project {name}: recent work, decisions, open threads, and gotchas"
+    timeout = float(os.environ.get(_RECALL_TIMEOUT_ENV, _RECALL_TIMEOUT_S))
+    try:
+        out = asyncio.run(
+            asyncio.wait_for(mem.search(query, search_type="CHUNKS", top_k=_RECALL_TOP_K, client=c), timeout)
+        )
+    except Exception:  # noqa: BLE001 - fail-open contract: recall must never break session start
+        return {}
+    ok = isinstance(out, dict) and "error" not in out
+    lines = _recall_lines(out.get("results")) if ok else []
+    if not lines:
+        return {}
+    ctx = f"Durable-memory recall for {name} (cognee):\n- " + "\n- ".join(lines)
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx[:9000]}}
+
+
 def main(argv: list[str] | None = None) -> int:
     """Lightweight hook entry: ``python -m repo_agent_harness.agent_hooks <event>``.
 
@@ -217,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         "pre-tool-use": pre_tool_use,
         "post-tool-use": post_tool_use,
         "user-prompt-submit": user_prompt_submit,
+        "session-start": session_start,
     }
     try:
         data = json.load(sys.stdin)

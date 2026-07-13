@@ -1,6 +1,17 @@
 {
-  "description": "astrojones: safe-shell + secret-read guard (PreToolUse) plus the perception layer — verify feedback after edits (PostToolUse) and a per-turn repo-state digest (UserPromptSubmit), all piped through the trusted bundled harness",
+  "description": "astrojones: safe-shell + secret-read guard (PreToolUse) plus the perception layer — verify feedback after edits (PostToolUse), a per-turn repo-state digest (UserPromptSubmit), and a bounded durable-memory recall at session start (SessionStart), all piped through the trusted bundled harness",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|Read|Edit|MultiEdit|Write|NotebookEdit",

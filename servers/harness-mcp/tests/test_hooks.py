@@ -173,3 +173,81 @@ def test_gate_ignores_path_outside_repo(tmp_path):
     inner.mkdir()
     blocks, _ = agent_hooks._serena_gate_blocks(str(inner), str(tmp_path / "outside.py"))
     assert blocks is False
+
+
+# --------------------------------------------------------------- session-start recall
+
+
+def _wired_client(fake):
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    return CogneeClient(**fake.client_kwargs())
+
+
+def test_session_start_injects_recall(repo, monkeypatch):
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.chdir(repo)
+    fake = FakeCognee(datasets=["agent_sessions"])
+    out = agent_hooks.session_start({}, client=_wired_client(fake))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert "Durable-memory recall" in ctx
+    assert "canned:CHUNKS" in ctx
+
+
+def test_session_start_silent_when_unconfigured(repo, monkeypatch):
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    monkeypatch.chdir(repo)
+    out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
+    assert out == {}
+
+
+def test_session_start_fails_open_when_cognee_down(repo, monkeypatch):
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.chdir(repo)
+    fake = FakeCognee(datasets=["agent_sessions"])
+    fake.transport_failures = 99
+    out = agent_hooks.session_start({}, client=_wired_client(fake))
+    assert out == {}
+
+
+def test_session_start_silent_on_timeout(repo, monkeypatch):
+    """A hanging cognee must NOT delay session start past the bound — silent empty response."""
+    import asyncio
+    import time
+
+    import httpx
+    from repo_agent_harness.cognee_client import CogneeAuth, CogneeClient
+    from tests import fake_cognee
+
+    async def _hang(request):
+        await asyncio.sleep(30)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("REPO_AGENT_HARNESS_RECALL_TIMEOUT_S", "0.2")
+    client = CogneeClient(
+        url=fake_cognee.BASE_URL,
+        auth=CogneeAuth(fake_cognee.EMAIL, fake_cognee.PASSWORD),
+        transport=httpx.MockTransport(_hang),
+    )
+    start = time.monotonic()
+    out = agent_hooks.session_start({}, client=client)
+    assert out == {}
+    assert time.monotonic() - start < 2, "recall must be cut at the bound, not the client timeout"
+
+
+def test_session_start_silent_outside_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = agent_hooks.session_start({})
+    assert out == {}
+
+
+def test_session_start_wired_into_cli(repo, monkeypatch, capsys):
+    """`repo-agent-harness hook session-start` resolves the handler (unconfigured env -> {})."""
+    rc, out = _run({}, repo, monkeypatch, capsys, event="session-start")
+    assert rc == 0
+    assert out == {}
