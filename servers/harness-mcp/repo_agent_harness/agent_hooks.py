@@ -250,6 +250,14 @@ _RECALL_LINE_CHARS = 300
 _RECALL_MAX_LINES = 8
 
 
+# SessionStart symbol map: a shallow, top-level-only tree of the repo's public shape, so a
+# fresh session orients without a round of discovery reads. Bounded like recall — local and
+# fail-open, never blocking startup.
+_SYMBOLS_LIMIT = 150
+_SYMBOLS_MAX_FILES = 40
+_SYMBOLS_MAX_CHARS = 3500
+
+
 def _recall_lines(results: object) -> list[str]:
     """Flatten a mem_search result payload into displayable lines (shape-tolerant).
 
@@ -275,43 +283,107 @@ def _recall_lines(results: object) -> list[str]:
     return lines[:_RECALL_MAX_LINES]
 
 
-def session_start(data: dict, client: CogneeClient | None = None) -> dict:
-    """Inject a bounded durable-memory recall at session start (fail-open, silent on trouble).
+def _symbol_lines(result: object) -> list[str]:
+    """Render a shallow (top-level only) symbol map into displayable lines.
 
-    Absorbs the cognee-memory plugin's recall role: one CHUNKS ``mem_search`` (pure
-    retrieval — a GRAPH_COMPLETION would spend the whole budget inside the server's LLM)
-    against the remote graph, hard-bounded (default 5s,
-    ``REPO_AGENT_HARNESS_RECALL_TIMEOUT_S``), yielding ``additionalContext`` — or ``{}`` on
-    timeout, unreachable/unconfigured cognee, or any error. A memory problem must never
-    delay or break session startup.
+    Keeps only records with ``parent is None`` — one flat pass over the public shape, no
+    method-level noise — and renders ``path: name(kind) — <doc>`` (doc omitted when absent).
+    Bounded to ``_SYMBOLS_MAX_FILES`` files and ``_SYMBOLS_MAX_CHARS`` total characters.
     """
-    _ = data
-    repo = git.repo_root()
-    if not repo:
-        return {}
+    symbols = getattr(result, "symbols", None)
+    if not isinstance(symbols, dict):
+        return []
+    lines: list[str] = []
+    files = 0
+    total = 0
+    for path, records in symbols.items():
+        tops = [r for r in records if getattr(r, "parent", None) is None]
+        if not tops:
+            continue
+        if files >= _SYMBOLS_MAX_FILES:
+            break
+        files += 1
+        for r in tops:
+            line = f"{path}: {r.name}({r.kind})"
+            doc = getattr(r, "doc", None)
+            if doc and doc.strip():
+                line += f" — {doc.strip()[:70]}"
+            if total + len(line) > _SYMBOLS_MAX_CHARS:
+                return lines
+            lines.append(line)
+            total += len(line)
+    return lines
+
+
+def _recall_section(name: str, client: CogneeClient | None) -> str | None:
+    """Bounded, fail-open durable-memory recall; returns the section text or ``None``.
+
+    ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
+    the caller simply omits the section rather than aborting session start.
+    """
     import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
 
     try:
         from repo_agent_harness import cognee_client, mem  # noqa: PLC0415 - lazy: pulls in httpx
         from repo_agent_harness.models import MemSearchIn, MemSearchResult  # noqa: PLC0415 - lazy
     except ImportError:
-        return {}
+        return None
     c = client if client is not None else cognee_client.get_client()
     if not c.configured:
-        return {}
-    name = Path(repo).name
+        return None
     query = f"Project {name}: recent work, decisions, open threads, and gotchas"
-    inp = MemSearchIn(query=query, search_type="CHUNKS", top_k=_RECALL_TOP_K)
+    inp = MemSearchIn(query=query, search_type="CHUNKS", dataset=None, top_k=_RECALL_TOP_K)
     timeout = float(os.environ.get(_RECALL_TIMEOUT_ENV, _RECALL_TIMEOUT_S))
     try:
         out = asyncio.run(asyncio.wait_for(mem.search(inp, client=c), timeout))
     except Exception:  # noqa: BLE001 - fail-open contract: recall must never break session start
-        return {}
+        return None
     lines = _recall_lines(out.results) if isinstance(out, MemSearchResult) else []
     if not lines:
+        return None
+    return f"Durable-memory recall for {name} (cognee):\n- " + "\n- ".join(lines)
+
+
+def session_start(data: dict, client: CogneeClient | None = None) -> dict:
+    """Inject session-start ``additionalContext`` from three independent, fail-open sections.
+
+    In order: an onboarding nudge (if the repo isn't yet in durable memory), a shallow repo
+    symbol map, and a bounded durable-memory recall. Each section is computed independently
+    and fails open to nothing, so a memory problem never delays or breaks session startup.
+    Returns ``{}`` only when all three sections are empty.
+    """
+    _ = data
+    repo = git.repo_root()
+    if not repo:
         return {}
-    ctx = f"Durable-memory recall for {name} (cognee):\n- " + "\n- ".join(lines)
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx[:9000]}}
+    name = Path(repo).name
+    sections: list[str] = []
+
+    # [0] Onboarding nudge — independent of cognee reachability/config, so it still fires
+    # when cognee is unconfigured or down.
+    with suppress(Exception):
+        if not paths.is_cognee_onboarded(repo):
+            sections.append("This repo isn't yet onboarded into durable memory — run /astrojones:onboard")
+
+    # [1] Repo symbol map — local, fail-open to nothing.
+    with suppress(Exception):
+        from repo_agent_harness import symbols  # noqa: PLC0415 - lazy: pulls in tree-sitter
+        from repo_agent_harness.symbols import SymbolsOverviewIn  # noqa: PLC0415 - lazy
+
+        res = symbols.overview(repo, SymbolsOverviewIn(path=None, limit=_SYMBOLS_LIMIT))
+        lines = _symbol_lines(res)
+        if lines:
+            sections.append(f"Repo symbol map ({name}):\n- " + "\n- ".join(lines))
+
+    # [2] Durable-memory recall — contributes nothing when unconfigured/unreachable/empty.
+    recall = _recall_section(name, client)
+    if recall:
+        sections.append(recall)
+
+    if not sections:
+        return {}
+    ctx = "\n\n".join(sections)[:9000]
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}
 
 
 def main(argv: list[str] | None = None) -> int:

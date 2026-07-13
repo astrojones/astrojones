@@ -201,7 +201,8 @@ def test_session_start_silent_when_unconfigured(repo, monkeypatch):
 
     monkeypatch.chdir(repo)
     out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
-    assert out == {}
+    # Unconfigured cognee contributes no recall section; the other fail-open sections may.
+    assert "Durable-memory recall" not in _ctx(out)
 
 
 def test_session_start_fails_open_when_cognee_down(repo, monkeypatch):
@@ -211,7 +212,7 @@ def test_session_start_fails_open_when_cognee_down(repo, monkeypatch):
     fake = FakeCognee(datasets=["agent_sessions"])
     fake.transport_failures = 99
     out = agent_hooks.session_start({}, client=_wired_client(fake))
-    assert out == {}
+    assert "Durable-memory recall" not in _ctx(out)
 
 
 def test_session_start_silent_on_timeout(repo, monkeypatch):
@@ -236,7 +237,7 @@ def test_session_start_silent_on_timeout(repo, monkeypatch):
     )
     start = time.monotonic()
     out = agent_hooks.session_start({}, client=client)
-    assert out == {}
+    assert "Durable-memory recall" not in _ctx(out)
     assert time.monotonic() - start < 2, "recall must be cut at the bound, not the client timeout"
 
 
@@ -247,7 +248,73 @@ def test_session_start_silent_outside_repo(tmp_path, monkeypatch):
 
 
 def test_session_start_wired_into_cli(repo, monkeypatch, capsys):
-    """`repo-agent-harness hook session-start` resolves the handler (unconfigured env -> {})."""
+    """`repo-agent-harness hook session-start` resolves the handler (unconfigured env)."""
     rc, out = _run({}, repo, monkeypatch, capsys, event="session-start")
     assert rc == 0
+    # Unconfigured cognee env yields no recall section (other fail-open sections may appear).
+    assert "Durable-memory recall" not in _ctx(out)
+
+
+def _ctx(out):
+    return out.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+
+def test_session_start_injects_symbol_map(repo, monkeypatch):
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    monkeypatch.chdir(repo)
+    out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
+    ctx = _ctx(out)
+    assert "Repo symbol map" in ctx
+    assert "charge" in ctx
+
+
+def test_session_start_symbol_map_before_recall(repo, monkeypatch):
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.chdir(repo)
+    fake = FakeCognee(datasets=["agent_sessions"])
+    out = agent_hooks.session_start({}, client=_wired_client(fake))
+    ctx = _ctx(out)
+    assert ctx.index("Repo symbol map") < ctx.index("Durable-memory recall")
+
+
+def test_session_start_nudge_when_not_onboarded(repo, monkeypatch):
+    """The onboarding nudge fires even when cognee is unconfigured (independent section)."""
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    monkeypatch.chdir(repo)
+    out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
+    assert "/astrojones:onboard" in _ctx(out)
+
+
+def test_session_start_no_nudge_when_onboarded(repo, monkeypatch):
+    from repo_agent_harness import paths
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    monkeypatch.chdir(repo)
+    paths.cognee_onboarded_file(str(repo)).write_text("{}", encoding="utf-8")
+    out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
+    assert "/astrojones:onboard" not in _ctx(out)
+
+
+def test_session_start_empty_when_onboarded_no_sources_and_unconfigured(tmp_path, monkeypatch):
+    """All three sections empty (onboarded, no sources, unconfigured cognee) -> {}."""
+    import subprocess
+
+    from repo_agent_harness import paths
+    from repo_agent_harness.cognee_client import CogneeClient
+
+    def _git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    _git("init", "-q")
+    _git("config", "user.email", "t@t.t")
+    _git("config", "user.name", "t")
+    (tmp_path / "README.md").write_text("# no sources here\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "init")
+    monkeypatch.chdir(tmp_path)
+    paths.cognee_onboarded_file(str(tmp_path)).write_text("{}", encoding="utf-8")
+    out = agent_hooks.session_start({}, client=CogneeClient(url=None, auth=None, key=None))
     assert out == {}
