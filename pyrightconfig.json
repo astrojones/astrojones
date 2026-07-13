@@ -1,0 +1,23 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.14",
+  "include": [
+    "servers/harness-mcp/repo_agent_harness",
+    "servers/harness-mcp/tests",
+    "hooks",
+    "docker"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.venv",
+    "**/.serena",
+    "**/.claude",
+    "**/.claude-plugin",
+    "**/.git"
+  ],
+  "typeCheckingMode": "standard",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none"
+}
