@@ -42,12 +42,12 @@ from typing import TYPE_CHECKING
 import anyio
 from anyio import from_thread, to_thread
 from fastmcp import Client
-from fastmcp.client.transports import StdioTransport
+from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
 from fastmcp.tools import Tool, ToolResult
 from mcp import types
 from pydantic import PrivateAttr
 
-from repo_agent_harness import paths, serena_gate
+from repo_agent_harness import paths, serena_daemon, serena_gate
 
 try:
     import fcntl
@@ -284,6 +284,8 @@ def reap_stale_serena_children(root: str | None) -> list[int]:
     """
     if root is None:
         return []
+    with suppress(Exception):  # opportunistic hygiene, never blocks startup
+        serena_daemon.clean_stale_state(root)  # drop daemon.json entries whose PID is dead
     ours = serena_command()
     if os.sep not in ours:  # bare "serena" on PATH: can't tell versions apart — do nothing
         return []
@@ -567,14 +569,19 @@ class SerenaGateway:
         task.add_done_callback(lambda t: t.cancelled() or t.exception())
         return task
 
+    def _resolve_root(self) -> str:
+        """Resolve ``self.root`` from ``_root_spec`` (a literal or a lazy callable), caching it."""
+        resolved = self._root_spec() if callable(self._root_spec) else self._root_spec
+        self.root = resolved or str(Path.cwd())
+        return self.root
+
     def _ensure_client(self) -> Client:
         """Build the client once, resolving the repo root lazily on first use."""
         if self._client is None:
             if self._injected_transport is not None:
                 transport = self._injected_transport
             else:
-                resolved = self._root_spec() if callable(self._root_spec) else self._root_spec
-                self.root = resolved or str(Path.cwd())
+                self._resolve_root()
                 transport = StdioTransport(
                     command=serena_command(),
                     args=serena_args(self.root),
@@ -652,6 +659,8 @@ class SerenaGateway:
         timed-out lock never blocks the connect.
         """
         await self._discard_locked()
+        if self._injected_transport is None and serena_daemon.serena_transport() == "http":
+            return await self._open_http_locked()
         client = self._ensure_client()
         budget = serena_connect_timeout()
         lock_fd = await to_thread.run_sync(_acquire_connect_lock, self.root, budget)
@@ -711,6 +720,38 @@ class SerenaGateway:
                 with suppress(BaseException):
                     await watchdog
             self._child_pid = _discover_child_pid(before, launch_args)
+            return client
+        finally:
+            _release_connect_lock(lock_fd)
+
+    async def _open_http_locked(self) -> Client:
+        """Connect to (or start) the worktree's shared Serena HTTP daemon. Caller holds the lock.
+
+        The daemon model removes the process multiplication: every harness process is a plain
+        HTTP client of ONE detached Serena per worktree (``serena_daemon.ensure_daemon`` finds it
+        by port + identity or spawns it). The stdio path's out-of-band watchdog machinery is
+        deliberately absent here — httpx reads are cancellation-native, so the cooperative
+        ``fail_after`` genuinely bounds the connect (proven by the never-responding-server test).
+        ``_child_pid`` stays ``None`` on purpose: the daemon is NOT our child, must survive
+        ``_discard_locked``/``aclose`` (clients come and go, the daemon persists), and is stopped
+        only explicitly (``repo-agent-harness serena-daemon stop``). The cross-process connect
+        flock still serializes cold daemon boots per worktree.
+        """
+        self._resolve_root()
+        budget = serena_connect_timeout()
+        lock_fd = await to_thread.run_sync(_acquire_connect_lock, self.root, budget)
+        try:
+            started = time.monotonic()
+            url = await serena_daemon.ensure_daemon(self.root, serena_command(), budget)
+            client = Client(StreamableHttpTransport(url))
+            remaining = max(1.0, budget - (time.monotonic() - started))
+            try:
+                with anyio.fail_after(remaining):
+                    await client.__aenter__()  # noqa: PLC2801
+            except TimeoutError:
+                msg = f"serena daemon connect to {url} timed out after {remaining:.0f}s"
+                raise TimeoutError(msg) from None
+            self._client = client
             return client
         finally:
             _release_connect_lock(lock_fd)

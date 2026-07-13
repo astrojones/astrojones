@@ -1,11 +1,27 @@
-"""A tiny fake Serena MCP server (stdio) for gateway tests — no LSP, no network."""
+"""A tiny fake Serena MCP server for gateway tests — no LSP.
+
+Default transport is stdio (the child-process tests). Invoked with Serena's real daemon argv
+(``start-mcp-server ... --transport streamable-http --port N --project X``) it instead serves
+streamable-http like the real daemon — including ``get_current_config`` reporting the active
+project, which is the harness's daemon identity check.
+"""
 
 import os
+import sys
 import time
+from pathlib import Path
 
 from fastmcp import FastMCP
 
-mcp = FastMCP("fake-serena")
+mcp = FastMCP("Serena")
+
+_PROJECT = os.environ.get("FAKE_SERENA_PROJECT", "")
+
+
+@mcp.tool()
+def initial_instructions() -> str:
+    """Mirror Serena's instructions — including the line the daemon identity check parses."""
+    return f"You are a fake Serena.\nThe project with name '{Path(_PROJECT).name}' at {_PROJECT} is activated.\n"
 
 
 @mcp.tool()
@@ -77,10 +93,26 @@ def wedge() -> str:
     return "wedged"
 
 
+def _flag(argv: list[str], name: str) -> str | None:
+    """The value following ``name`` in ``argv``, or None."""
+    if name in argv:
+        idx = argv.index(name)
+        if idx + 1 < len(argv):
+            return argv[idx + 1]
+    return None
+
+
 if __name__ == "__main__":
     # Optional cold-boot delay: sleeping before run() defers the MCP initialize handshake, so
     # the gateway's connect blocks long enough to be cancelled mid-flight (connect-storm test).
     _boot_delay = float(os.environ.get("FAKE_SERENA_BOOT_DELAY", "0") or "0")
     if _boot_delay:
         time.sleep(_boot_delay)
-    mcp.run()
+    argv = sys.argv[1:]
+    project = _flag(argv, "--project")
+    if project and not _PROJECT:
+        _PROJECT = str(Path(project).resolve())
+    if _flag(argv, "--transport") == "streamable-http":
+        mcp.run(transport="http", host=_flag(argv, "--host") or "127.0.0.1", port=int(_flag(argv, "--port") or "8000"))
+    else:
+        mcp.run()

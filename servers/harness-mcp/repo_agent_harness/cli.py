@@ -25,6 +25,7 @@ from repo_agent_harness import (
     policies,
     prompts_registry,
     scaffold,
+    serena_daemon,
     verify,
 )
 
@@ -191,6 +192,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=["pre-tool-use", "post-tool-use", "user-prompt-submit", "session-start", "stop", "pre-compact"],
     )
     sp = sub.add_parser(
+        "serena-daemon",
+        parents=[common],
+        help="Manage the worktree's shared Serena HTTP daemon (v1 lifecycle: explicit stop)",
+    )
+    sp.add_argument("action", choices=["status", "stop"])
+    sp = sub.add_parser(
         "migrate-serena-memories",
         parents=[common],
         help="One-shot: ship .serena/memories/*.md into cognee (project_docs + repo tag); originals stay",
@@ -268,6 +275,11 @@ def main(argv: list[str] | None = None) -> int:
         "migrate-serena-memories": lambda: asyncio.run(
             mem.migrate_serena_memories(root, args.dataset, dry_run=args.dry_run, confirm=args.confirm)
         ).model_dump(exclude_none=True),
+        "serena-daemon": lambda: (
+            serena_daemon.stop_daemon(root)
+            if args.action == "stop"
+            else {"ok": True, "state": serena_daemon.read_state(root), "transport": serena_daemon.serena_transport()}
+        ),
         "init": lambda: scaffold.init_repo(
             root,
             agents_md=args.agents_md,

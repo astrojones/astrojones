@@ -144,6 +144,8 @@ max-nested-blocks = 5
 "repo_agent_harness/secrets.py" = ["A005", "D105"]
 # Symbol indexer shells out to `git ls-files` only (fixed argv, PATH lookup by design).
 "repo_agent_harness/symbols.py" = ["S404"]
+# Daemon manager spawns the detached Serena HTTP server (fixed argv from our own config).
+"repo_agent_harness/serena_daemon.py" = ["S404"]
 # The MCP prompt named "test" is not a pytest test function.
 "repo_agent_harness/server.py" = [
     "PT028",
