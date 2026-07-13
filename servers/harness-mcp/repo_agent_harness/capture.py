@@ -5,10 +5,10 @@ call**. Hooks (stop / pre-compact / post-tool-use piggyback) do exactly one sqli
 INSERT-commit-close into a per-worktree WAL queue — sub-10ms, durable, fail-open. The
 long-lived MCP server drains that queue in-process (:class:`BrainCapture`, registered in
 ``_lifespan`` beside the perception daemon — deliberately NOT a detached daemon), optionally
-digesting raw entries into an observation summary first (``BRAIN_DIGEST_MODEL``), then ships
-via the shared cognee client. Rows are deleted only after a successful ship, so a crash or a
-cognee outage merely leaves the queue to resume on the next server start — the accepted cost:
-no drain runs between sessions.
+digesting raw entries into an observation summary first via a pluggable backend (see
+:mod:`repo_agent_harness.digest_providers`), then ships via the shared cognee client. Rows are
+deleted only after a successful ship, so a crash or a cognee outage merely leaves the queue to
+resume on the next server start — the accepted cost: no drain runs between sessions.
 """
 
 from __future__ import annotations
@@ -17,12 +17,11 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import sqlite3
 import time
 from typing import TYPE_CHECKING
 
-from repo_agent_harness import paths
+from repo_agent_harness import digest_providers, paths
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,20 +38,6 @@ _MAX_PAYLOAD_CHARS = 8_000
 # Backstop against a never-draining queue (cognee never configured / down for weeks):
 # enqueue prunes the oldest rows beyond this cap, so the local footprint stays bounded.
 _MAX_QUEUE_ROWS = 10_000
-
-# Digest-on-drain: summarize a raw batch into one observation digest before ingest, via the
-# locally-authenticated claude CLI (subscription auth — zero cognee server cost). 'off'
-# ships the raw entries; any digest failure falls back to raw. Runs inside the async drain
-# ONLY — never on a hook path.
-DIGEST_MODEL_ENV = "BRAIN_DIGEST_MODEL"
-DIGEST_MODEL_DEFAULT = "claude-sonnet-5"
-_DIGEST_TIMEOUT_S = 120.0
-_DIGEST_PROMPT = (
-    "You are compressing an agent-session capture log into a durable memory observation. "
-    "Summarize the entries below into a compact digest: what was worked on, decisions made, "
-    "files touched, and outcomes. Keep concrete identifiers (paths, commits, tool names). "
-    "Output only the digest text.\n\nEntries:\n"
-)
 
 
 def queue_db(root: str) -> Path:
@@ -147,7 +132,7 @@ class BrainCapture:
         if not rows:
             return 0
         entries = [self._render(created_at, event, payload) for _, created_at, event, payload in rows]
-        digest = await _maybe_digest(entries)
+        digest = await digest_providers.digest(entries)
         items = [digest] if digest else entries
         await self._client.add(items, CAPTURE_DATASET, CAPTURE_NODE_SET, run_in_background=False)
         await self._client.cognify(CAPTURE_DATASET, run_in_background=True)
@@ -170,48 +155,3 @@ class BrainCapture:
     def _render(created_at: float, event: str, payload: str) -> str:
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(created_at))
         return f"[{stamp}] {event}: {payload}"
-
-
-def digest_model() -> str | None:
-    """The digest model from ``BRAIN_DIGEST_MODEL`` (default sonnet-5), or None when 'off'."""
-    raw = (os.environ.get(DIGEST_MODEL_ENV) or DIGEST_MODEL_DEFAULT).strip()
-    return None if raw.lower() in {"off", "0", "false", ""} else raw
-
-
-async def _maybe_digest(entries: list[str]) -> str | None:
-    """Digest raw entries into one observation via the claude CLI; None = ship raw (fallback).
-
-    Uses the locally-authenticated ``claude`` CLI in print mode (subscription auth,
-    claude-mem's proven pattern) so the cognee server never pays extraction tokens for raw
-    noise. Bounded and fail-open: a missing CLI, non-zero exit, timeout, or empty output all
-    fall back to shipping the raw entries.
-    """
-    model = digest_model()
-    if model is None or not entries:
-        return None
-    prompt = _DIGEST_PROMPT + "\n".join(entries)
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude",
-            "-p",
-            prompt,
-            "--model",
-            model,
-            "--output-format",
-            "text",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
-    except OSError:
-        return None  # CLI not installed — raw entries it is
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), _DIGEST_TIMEOUT_S)
-    except TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        return None
-    if proc.returncode != 0:
-        return None
-    text = out.decode("utf-8", errors="replace").strip()
-    return text or None

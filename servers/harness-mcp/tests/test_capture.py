@@ -4,7 +4,7 @@ import json
 import threading
 
 import pytest
-from repo_agent_harness import agent_hooks, capture
+from repo_agent_harness import agent_hooks, capture, digest_providers
 from repo_agent_harness.cognee_client import CogneeClient
 from tests.fake_cognee import FakeCognee
 
@@ -98,7 +98,7 @@ def test_post_tool_use_piggybacks_capture(repo, monkeypatch):
 
 
 async def test_drain_ships_batch_and_deletes_rows(tmp_path, monkeypatch):
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "off")
+    monkeypatch.setenv(digest_providers.PROVIDER_ENV, "off")
     root = str(tmp_path)
     capture.enqueue(root, "stop", {"a": 1})
     capture.enqueue(root, "post_tool_use", {"path": "x.py"})
@@ -117,7 +117,7 @@ async def test_drain_ships_batch_and_deletes_rows(tmp_path, monkeypatch):
 
 async def test_drain_keeps_rows_when_ship_fails(tmp_path, monkeypatch):
     """Rows are deleted only after a successful ship — an outage loses nothing."""
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "off")
+    monkeypatch.setenv(digest_providers.PROVIDER_ENV, "off")
     root = str(tmp_path)
     capture.enqueue(root, "stop", {"a": 1})
     fake = FakeCognee(datasets=[capture.CAPTURE_DATASET])
@@ -129,7 +129,7 @@ async def test_drain_keeps_rows_when_ship_fails(tmp_path, monkeypatch):
 
 
 async def test_drain_noop_on_empty_queue(tmp_path, monkeypatch):
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "off")
+    monkeypatch.setenv(digest_providers.PROVIDER_ENV, "off")
     fake = FakeCognee()
     brain = capture.BrainCapture(str(tmp_path), _wired(fake))
     assert await brain._drain_once() == 0
@@ -146,36 +146,12 @@ async def test_drain_ships_digest_when_available(tmp_path, monkeypatch):
         assert len(entries) == 2
         return "DIGEST: two stop events"
 
-    monkeypatch.setattr(capture, "_maybe_digest", _fake_digest)
+    monkeypatch.setattr(digest_providers, "digest", _fake_digest)
     fake = FakeCognee(datasets=[capture.CAPTURE_DATASET])
     brain = capture.BrainCapture(root, _wired(fake))
     assert await brain._drain_once() == 2
     add_payload = next(p for m, path, p in fake.requests if path == "/api/v1/add")
     assert add_payload["data"] == "DIGEST: two stop events"
-
-
-# ------------------------------------------------------------------------- digest
-
-
-def test_digest_model_env_switch(monkeypatch):
-    monkeypatch.delenv(capture.DIGEST_MODEL_ENV, raising=False)
-    assert capture.digest_model() == capture.DIGEST_MODEL_DEFAULT
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "off")
-    assert capture.digest_model() is None
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "claude-haiku-4-5")
-    assert capture.digest_model() == "claude-haiku-4-5"
-
-
-async def test_digest_off_ships_raw(monkeypatch):
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "off")
-    assert await capture._maybe_digest(["entry"]) is None
-
-
-async def test_digest_falls_back_when_cli_missing(monkeypatch):
-    """A missing claude CLI must silently fall back to raw entries."""
-    monkeypatch.setenv(capture.DIGEST_MODEL_ENV, "claude-sonnet-5")
-    monkeypatch.setenv("PATH", "/nonexistent")
-    assert await capture._maybe_digest(["entry"]) is None
 
 
 def test_rendered_entries_carry_event_and_payload(tmp_path):
