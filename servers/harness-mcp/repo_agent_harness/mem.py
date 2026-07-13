@@ -30,6 +30,7 @@ from repo_agent_harness.models import (
     MemIngestEstimate,
     MemIngestIn,
     MemIngestResult,
+    MemMigrateResult,
     MemOntologyIn,
     MemOntologyResult,
     MemRememberIn,
@@ -256,6 +257,44 @@ async def ontology(inp: MemOntologyIn, client: CogneeClient | None = None) -> Me
         individuals=len(inp.individuals),
         types=sorted(set(inp.individuals.values())),
         prompt=ontology_prompt(inp.individuals),
+    )
+
+
+async def migrate_serena_memories(
+    root: str,
+    dataset: str = DEFAULT_DATASET,
+    *,
+    dry_run: bool = False,
+    confirm: bool = False,
+    client: CogneeClient | None = None,
+) -> MemMigrateResult | MemError:
+    """One-shot: ship ``.serena/memories/*.md`` into cognee; originals stay in place.
+
+    The retirement move for Serena's memory tools — after this, cognee is the only durable
+    memory surface (Serena keeps reading its own files internally for the onboarding gate,
+    they just stop being an agent-facing store). Tagged ``project_docs`` plus a per-repo
+    tag so the notes stay filterable by origin.
+    """
+    rootp = Path(root).resolve()
+    mem_dir = rootp / ".serena" / "memories"
+    files = sorted(p for p in mem_dir.glob("*.md")) if mem_dir.is_dir() else []
+    node_set = ["project_docs", f"repo:{rootp.name}"]
+    if not files:
+        return MemMigrateResult(migrated=0, files=[], dataset=dataset, node_set=node_set, dry_run=dry_run)
+    items = [f"# Serena memory: {p.stem} (repo {rootp.name})\n\n{p.read_text(encoding='utf-8')}" for p in files]
+    out = await ingest(
+        MemIngestIn(items=items, dataset=dataset, node_set=node_set, dry_run=dry_run, confirm=confirm),
+        client=client,
+    )
+    if isinstance(out, MemError):
+        return out
+    return MemMigrateResult(
+        migrated=0 if out.dry_run else out.ingested,
+        files=[p.name for p in files],
+        dataset=dataset,
+        node_set=node_set,
+        dry_run=out.dry_run,
+        estimate=out.estimate,
     )
 
 

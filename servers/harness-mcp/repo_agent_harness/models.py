@@ -174,6 +174,17 @@ class MemOntologyResult(BaseModel):
     prompt: str
 
 
+class MemMigrateResult(BaseModel):
+    """migrate-serena-memories outcome: which notes shipped where (originals stay put)."""
+
+    migrated: int
+    files: list[str]
+    dataset: str
+    node_set: list[str]
+    dry_run: bool = False
+    estimate: MemIngestEstimate | None = None
+
+
 class MemDoctorResult(BaseModel):
     """mem_doctor verdict: checkable memory health + competing-capture sentinels."""
 

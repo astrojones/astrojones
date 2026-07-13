@@ -1013,10 +1013,25 @@ def load_snapshot() -> dict:
     return json.loads(resource.read_text(encoding="utf-8"))
 
 
+# Serena's memory tools are NOT proxied: they are a second durable-memory surface, retired
+# in favor of the mem_* tools (cognee) — one memory surface, and Serena stays pure code
+# intelligence. Serena still reads its own `.serena/memories/` internally (onboarding gate);
+# migrate existing notes with `repo-agent-harness migrate-serena-memories`.
+_RETIRED_MEMORY_TOOLS = frozenset(
+    {"write_memory", "read_memory", "list_memories", "delete_memory", "rename_memory", "edit_memory"}
+)
+
+
 def proxied_tools(gw: SerenaGateway) -> list[Tool]:
-    """Build the prefixed, forwarding Tool objects from the static snapshot (no connection)."""
+    """Build the prefixed, forwarding Tool objects from the static snapshot (no connection).
+
+    Filters the retired memory tools by name — the snapshot keeps carrying them (it mirrors
+    upstream Serena verbatim), so the retirement is a proxy-layer decision, not a re-dump.
+    """
     tools: list[Tool] = []
     for entry in load_snapshot()["tools"]:
+        if entry["name"] in _RETIRED_MEMORY_TOOLS:
+            continue
         tool = _ProxiedSerenaTool(
             name=TOOL_PREFIX + entry["name"],
             description=entry.get("description"),

@@ -750,3 +750,17 @@ def test_connect_lock_none_root_fails_open():
     """No resolved root (injected transports/tests) → no lock, connect proceeds."""
     assert gateway._acquire_connect_lock(None, timeout=1.0) is None
     gateway._release_connect_lock(None)  # no-op, must not raise
+
+
+def test_proxied_tools_retire_serena_memory_surface(repo):
+    """The six serena memory tools are filtered out — cognee (mem_*) is the only memory surface."""
+    transport = StdioTransport(command="/nonexistent/serena", args=[], cwd=str(repo), keep_alive=True)
+    gw = gateway.SerenaGateway(str(repo), transport=transport)
+    names = {t.name for t in gateway.proxied_tools(gw)}
+    retired = {gateway.TOOL_PREFIX + bare for bare in gateway._RETIRED_MEMORY_TOOLS}
+    assert not (names & retired), f"retired memory tools leaked through the proxy: {names & retired}"
+    # The snapshot itself still carries them (it mirrors upstream verbatim).
+    snapshot_names = {t["name"] for t in gateway.load_snapshot()["tools"]}
+    assert gateway._RETIRED_MEMORY_TOOLS <= snapshot_names
+    # Code-intelligence tools are untouched.
+    assert {"serena_find_symbol", "serena_onboarding", "serena_rename_symbol"} <= names

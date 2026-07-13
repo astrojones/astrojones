@@ -7,6 +7,7 @@ Every subcommand emits JSON and exits non-zero when a check reports ``ok: false`
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from repo_agent_harness import (
     git,
     health,
     impact,
+    mem,
     policies,
     prompts_registry,
     scaffold,
@@ -189,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
         choices=["pre-tool-use", "post-tool-use", "user-prompt-submit", "session-start", "stop", "pre-compact"],
     )
     sp = sub.add_parser(
+        "migrate-serena-memories",
+        parents=[common],
+        help="One-shot: ship .serena/memories/*.md into cognee (project_docs + repo tag); originals stay",
+    )
+    sp.add_argument("--dataset", default=mem.DEFAULT_DATASET, help="Target cognee dataset name")
+    sp.add_argument("--dry-run", action="store_true", help="Only report files and cost estimate")
+    sp.add_argument("--confirm", action="store_true", help="Accept an over-limit estimated cost")
+    sp = sub.add_parser(
         "prompt",
         parents=[common],
         help="Inspect the per-repo workflow prompts SSOT (works without a git repo)",
@@ -255,6 +265,9 @@ def main(argv: list[str] | None = None) -> int:
         "sync-prompts": lambda: drift.sync_prompts(root, force=args.force),
         "health": lambda: health.run(root, only=args.check, refresh=args.refresh).model_dump(),
         "gateway-snapshot": lambda: gateway.generate_snapshot(root),
+        "migrate-serena-memories": lambda: asyncio.run(
+            mem.migrate_serena_memories(root, args.dataset, dry_run=args.dry_run, confirm=args.confirm)
+        ).model_dump(exclude_none=True),
         "init": lambda: scaffold.init_repo(
             root,
             agents_md=args.agents_md,

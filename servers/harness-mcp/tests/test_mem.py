@@ -267,3 +267,43 @@ async def test_doctor_detects_pending_cognee_plugin_captures(tmp_path, monkeypat
     monkeypatch.setattr(mem, "_COGNEE_PLUGIN_DIR", tmp_path / ".cognee-plugin")
     out = await mem.doctor(client=_wired(fake))
     assert any("pending captures" in h for h in out.hints)
+
+
+# ---------------------------------------------------------------- serena migration
+
+
+async def test_migrate_serena_memories_ships_notes_and_keeps_originals(tmp_path):
+    mem_dir = tmp_path / ".serena" / "memories"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "project_overview.md").write_text("overview text")
+    (mem_dir / "gotchas.md").write_text("gotcha text")
+    fake = FakeCognee(datasets=["agent_sessions"])
+    out = await mem.migrate_serena_memories(str(tmp_path), client=_wired(fake))
+    assert not isinstance(out, MemError)
+    assert out.migrated == 2
+    assert out.files == ["gotchas.md", "project_overview.md"]
+    assert out.node_set == ["project_docs", f"repo:{tmp_path.name}"]
+    assert (mem_dir / "project_overview.md").exists()  # originals stay in place
+    add_payload = next(p for m, path, p in fake.requests if path == "/api/v1/add")
+    assert add_payload["node_set"] == ["project_docs", f"repo:{tmp_path.name}"]
+    data = str(add_payload["data"])
+    assert "gotcha text" in data
+    assert "Serena memory: gotchas" in data
+
+
+async def test_migrate_serena_memories_dry_run_and_empty_dir(tmp_path):
+    fake = FakeCognee()
+    out = await mem.migrate_serena_memories(str(tmp_path), client=_wired(fake))
+    assert not isinstance(out, MemError)
+    assert out.migrated == 0
+    assert out.files == []
+    assert fake.requests == []
+    mem_dir = tmp_path / ".serena" / "memories"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "note.md").write_text("x" * 4000)
+    out = await mem.migrate_serena_memories(str(tmp_path), dry_run=True, client=_wired(fake))
+    assert not isinstance(out, MemError)
+    assert out.dry_run is True
+    assert out.migrated == 0
+    assert out.estimate is not None
+    assert fake.requests == []
