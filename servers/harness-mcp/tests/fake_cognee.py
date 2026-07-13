@@ -91,6 +91,11 @@ class FakeCognee:
             return httpx.Response(200, json=body)
         if path == "/api/v1/datasets/status":
             self._record(request, dict(request.url.params))
+            queried = request.url.params.get("dataset")
+            known_ids = {f"id-{n}" for n in self.datasets}
+            if queried not in known_ids:
+                # Mirrors the live API: /datasets/status takes a dataset ID, not a name.
+                return httpx.Response(400, json={"detail": [{"msg": "Input should be a valid UUID"}]})
             return httpx.Response(200, json={"status": "DATASET_PROCESSING_COMPLETED"})
         if path == "/api/v1/search":
             payload = json.loads(request.content)

@@ -302,9 +302,9 @@ class CogneeClient:
         out = await self.request("GET", "/api/v1/datasets", idempotent=True)
         return out if isinstance(out, list) else []
 
-    async def dataset_status(self, dataset: str) -> Json:
-        """GET /api/v1/datasets/status for one dataset name."""
-        return await self.request("GET", "/api/v1/datasets/status", params={"dataset": [dataset]}, idempotent=True)
+    async def dataset_status(self, dataset_id: str) -> Json:
+        """GET /api/v1/datasets/status for one dataset id (the API rejects a bare name)."""
+        return await self.request("GET", "/api/v1/datasets/status", params={"dataset": [dataset_id]}, idempotent=True)
 
     async def search(
         self,

@@ -171,6 +171,8 @@ async def test_stats_reports_existence_and_honest_unsupported_counts():
     assert isinstance(out, MemStatsResult)
     assert out.dataset_id == "id-kolbe"
     assert out.node_counts_supported is False
+    status_call = next(p for m, path, p in fake.requests if path == "/api/v1/datasets/status")
+    assert status_call["dataset"] == "id-kolbe"  # the API takes the dataset ID, not its name
 
 
 async def test_stats_unknown_dataset_lists_available():

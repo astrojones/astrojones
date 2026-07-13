@@ -179,7 +179,7 @@ async def stats(inp: MemStatsIn, client: CogneeClient | None = None) -> MemStats
                 error=f"dataset {inp.dataset!r} not found",
                 available=sorted(str(d.get("name")) for d in datasets),
             )
-        status = await c.dataset_status(inp.dataset)
+        status = await c.dataset_status(str(entry.get("id")))
     except CogneeError as exc:
         return _error(exc)
     return MemStatsResult(dataset=inp.dataset, dataset_id=str(entry.get("id")), status=status)
