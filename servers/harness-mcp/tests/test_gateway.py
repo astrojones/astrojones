@@ -718,3 +718,35 @@ def test_pyproject_pins_serena_to_the_same_sha():
     assert m, "serena-agent git dependency missing from pyproject.toml"
     assert m.group(1) == gateway.SERENA_PIN, "pyproject serena pin drifted from gateway.SERENA_PIN"
     assert "serena-agent @ git+https://github.com/oraios/serena@" in text
+
+
+def test_connect_lock_acquire_and_release(tmp_path, monkeypatch):
+    """The connect flock is taken for a real root and releasing frees it for the next holder."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path))
+    fd = gateway._acquire_connect_lock(str(tmp_path), timeout=1.0)
+    assert fd is not None
+    lock_file = tmp_path / "repos"
+    assert any(lock_file.rglob("connect.lock"))
+    gateway._release_connect_lock(fd)
+    fd2 = gateway._acquire_connect_lock(str(tmp_path), timeout=1.0)
+    assert fd2 is not None
+    gateway._release_connect_lock(fd2)
+
+
+def test_connect_lock_fails_open_when_held(tmp_path, monkeypatch):
+    """A held lock makes a second acquirer wait, then fail open (None) — never block forever."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path))
+    holder = gateway._acquire_connect_lock(str(tmp_path), timeout=1.0)
+    assert holder is not None
+    start = time.monotonic()
+    fd = gateway._acquire_connect_lock(str(tmp_path), timeout=0.5)
+    waited = time.monotonic() - start
+    assert fd is None
+    assert waited >= 0.4, "second acquirer must actually wait for the timeout before failing open"
+    gateway._release_connect_lock(holder)
+
+
+def test_connect_lock_none_root_fails_open():
+    """No resolved root (injected transports/tests) → no lock, connect proceeds."""
+    assert gateway._acquire_connect_lock(None, timeout=1.0) is None
+    gateway._release_connect_lock(None)  # no-op, must not raise
