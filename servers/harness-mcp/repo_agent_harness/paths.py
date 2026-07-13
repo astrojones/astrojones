@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import time
 from pathlib import Path
 
 
@@ -47,3 +49,30 @@ def perception_last_seen_file(root: str) -> Path:
 def perception_touched_file(root: str) -> Path:
     """Path to the set of files the agent has edited this session (PostToolUse attribution)."""
     return repo_state_dir(root) / PERCEPTION_TOUCHED_FILE
+
+
+# Cognee onboarding marker under repo_state_dir(). Records that this repo's memory graph has
+# been bootstrapped, so the daemon/hooks skip re-onboarding. Lives beside symbols.json, so it
+# is gitignored-by-construction (outside the working tree).
+COGNEE_ONBOARDED_FILE = "cognee_onboarded.json"
+
+
+def cognee_onboarded_file(root: str) -> Path:
+    """Path to the marker recording that this repo has been onboarded into cognee."""
+    return repo_state_dir(root) / COGNEE_ONBOARDED_FILE
+
+
+def is_cognee_onboarded(root: str) -> bool:
+    """True iff the marker exists and parses as JSON; fail-closed to False on any error."""
+    try:
+        with cognee_onboarded_file(root).open(encoding="utf-8") as f:
+            json.load(f)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def mark_cognee_onboarded(root: str, **meta: object) -> None:
+    """Write the onboarding marker, recording the epoch time plus any provided metadata."""
+    payload = {"onboarded_at": time.time(), **meta}
+    cognee_onboarded_file(root).write_text(json.dumps(payload), encoding="utf-8")

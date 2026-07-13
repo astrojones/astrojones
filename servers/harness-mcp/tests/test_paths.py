@@ -48,3 +48,37 @@ def test_repo_state_dir_path_structure(tmp_path, monkeypatch):
     state = paths.repo_state_dir(str(tmp_path))
     rid = paths.repo_id(str(tmp_path))
     assert state == home / "repos" / rid
+
+
+def test_is_cognee_onboarded_false_before_mark(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
+    assert paths.is_cognee_onboarded(str(tmp_path)) is False
+
+
+def test_is_cognee_onboarded_true_after_mark(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
+    paths.mark_cognee_onboarded(str(tmp_path))
+    assert paths.is_cognee_onboarded(str(tmp_path)) is True
+
+
+def test_cognee_onboarded_file_path_structure(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
+    f = paths.cognee_onboarded_file(str(tmp_path))
+    assert f == paths.repo_state_dir(str(tmp_path)) / "cognee_onboarded.json"
+
+
+def test_mark_cognee_onboarded_writes_meta(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
+    paths.mark_cognee_onboarded(str(tmp_path), dataset="ds1", ontology_key="ok1")
+    data = json.loads(paths.cognee_onboarded_file(str(tmp_path)).read_text())
+    assert data["dataset"] == "ds1"
+    assert data["ontology_key"] == "ok1"
+    assert isinstance(data["onboarded_at"], (int, float))
+
+
+def test_is_cognee_onboarded_false_on_invalid_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
+    paths.cognee_onboarded_file(str(tmp_path)).write_text("{ not json")
+    assert paths.is_cognee_onboarded(str(tmp_path)) is False
