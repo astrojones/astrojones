@@ -137,7 +137,7 @@ async def ingest(inp: MemIngestIn, client: CogneeClient | None = None) -> MemIng
         )
     c = _client(client)
     try:
-        fresh = await _ship(c, inp.items, inp.dataset, inp.node_set)
+        fresh = await _ship(c, inp.items, inp.dataset, inp.node_set, inp.ontology_key)
     except CogneeError as exc:
         return _error(exc, estimate=estimate)
     return MemIngestResult(
@@ -149,18 +149,30 @@ async def ingest(inp: MemIngestIn, client: CogneeClient | None = None) -> MemIng
     )
 
 
-async def _ship(c: CogneeClient, items: list[str], dataset: str, node_set: list[str] | None) -> bool:
+async def _ship(
+    c: CogneeClient,
+    items: list[str],
+    dataset: str,
+    node_set: list[str] | None,
+    ontology_key: str | None = None,
+) -> bool:
     """Add + cognify ``items``; serial-first on a fresh dataset. Returns whether it was fresh."""
     existing = {d.get("name") for d in await c.datasets()}
     fresh = dataset not in existing
     rest = items
     if fresh:
         await c.add(items[:1], dataset, node_set, run_in_background=False)
-        await c.cognify(dataset, run_in_background=False, data_per_batch=1, chunks_per_batch=1)
+        await c.cognify(
+            dataset,
+            run_in_background=False,
+            data_per_batch=1,
+            chunks_per_batch=1,
+            ontology_key=ontology_key,
+        )
         rest = items[1:]
     if rest:
         await c.add(rest, dataset, node_set, run_in_background=False)
-        await c.cognify(dataset, run_in_background=True)
+        await c.cognify(dataset, run_in_background=True, ontology_key=ontology_key)
     return fresh
 
 

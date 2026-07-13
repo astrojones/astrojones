@@ -344,6 +344,7 @@ class CogneeClient:
         run_in_background: bool = True,
         data_per_batch: int | None = None,
         chunks_per_batch: int | None = None,
+        ontology_key: str | None = None,
     ) -> Json:
         """POST /api/v1/cognify for one dataset."""
         payload: dict[str, Json] = {"datasets": [dataset], "runInBackground": run_in_background}
@@ -351,6 +352,8 @@ class CogneeClient:
             payload["dataPerBatch"] = data_per_batch
         if chunks_per_batch is not None:
             payload["chunksPerBatch"] = chunks_per_batch
+        if ontology_key is not None:
+            payload["ontologyKey"] = ontology_key
         return await self.request("POST", "/api/v1/cognify", json=payload)
 
     async def ontology_exists(self, key: str) -> bool:

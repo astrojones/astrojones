@@ -156,6 +156,32 @@ async def test_ingest_existing_dataset_skips_serial_first():
     assert cognifies[0]["runInBackground"] is True
 
 
+async def test_ingest_binds_pinned_ontology_key_to_cognify():
+    """A non-dry-run ingest threads ontology_key into every cognify payload as ``ontologyKey``."""
+    fake = FakeCognee(datasets=["other"])
+    inp = MemIngestIn(
+        items=["doc-a", "doc-b"],
+        dataset="fresh_ds",
+        ontology_key="harness-abc",
+        confirm=True,
+    )
+    out = await mem.ingest(inp, client=_wired(fake))
+    assert isinstance(out, MemIngestResult)
+    cognifies = [p for m, path, p in fake.requests if path == "/api/v1/cognify"]
+    assert cognifies
+    assert all(p["ontologyKey"] == "harness-abc" for p in cognifies)
+
+
+async def test_ingest_without_ontology_key_omits_it():
+    """Omitting ontology_key leaves no ``ontologyKey`` in the cognify payload."""
+    fake = FakeCognee(datasets=["docs"])
+    out = await mem.ingest(MemIngestIn(items=["a", "b"], dataset="docs"), client=_wired(fake))
+    assert isinstance(out, MemIngestResult)
+    cognifies = [p for m, path, p in fake.requests if path == "/api/v1/cognify"]
+    assert cognifies
+    assert all("ontologyKey" not in p for p in cognifies)
+
+
 async def test_ingest_empty_items_is_an_error():
     out = await mem.ingest(MemIngestIn(items=[], dataset="docs"), client=_unconfigured())
     assert isinstance(out, MemError)

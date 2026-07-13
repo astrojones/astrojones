@@ -85,6 +85,10 @@ class MemIngestIn(BaseModel):
     items: list[str] = Field(..., description="Curated documents to ingest")
     dataset: str = Field(..., description="Target dataset name")
     node_set: list[str] | None = Field(None, description="Category tags applied to every item")
+    ontology_key: str | None = Field(
+        None,
+        description="pinned ontology key from mem_ontology; extraction uses this OWL vocabulary",
+    )
     dry_run: bool = Field(False, description="Only return the cost estimate; write nothing")
     confirm: bool = Field(False, description="Accept an over-limit estimated cost")
 
