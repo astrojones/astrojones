@@ -320,7 +320,7 @@ async def test_doctor_detects_pending_cognee_plugin_captures(tmp_path, monkeypat
     (pending / "cap.json").write_text("{}")
     monkeypatch.setattr(mem, "_COGNEE_PLUGIN_DIR", tmp_path / ".cognee-plugin")
     out = await mem.doctor(client=_wired(fake))
-    assert any("pending captures" in h for h in out.hints)
+    assert any("cognee-memory plugin capture looks LIVE" in h for h in out.hints)
 
 
 # ---------------------------------------------------------------- serena migration
