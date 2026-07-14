@@ -311,7 +311,11 @@ async def migrate_serena_memories(
 
 
 def _capture_sentinels() -> list[str]:
-    """Detect live competing capture pipelines (claude-mem / cognee-memory plugin)."""
+    """Detect live competing capture pipelines (claude-mem / cognee-memory plugin).
+
+    Both sentinels are recency-gated: they warn only when a pipeline wrote within
+    _SENTINEL_RECENT_S, so stale residue from a since-disabled plugin never false-alarms.
+    """
     hints: list[str] = []
     db = _CLAUDE_MEM_DB.expanduser()
     try:
@@ -324,11 +328,20 @@ def _capture_sentinels() -> list[str]:
         pass
     plugin_dir = _COGNEE_PLUGIN_DIR.expanduser()
     try:
-        if plugin_dir.is_dir() and any(any(p.iterdir()) for p in plugin_dir.rglob("pending") if p.is_dir()):
-            hints.append(
-                "cognee-memory plugin has pending captures (~/.cognee-plugin/**/pending non-empty) — "
-                "disable it or memory is double-written"
+        if plugin_dir.is_dir():
+            now = time.time()
+            recent = any(
+                now - f.stat().st_mtime < _SENTINEL_RECENT_S
+                for p in plugin_dir.rglob("pending")
+                if p.is_dir()
+                for f in p.iterdir()
+                if f.is_file()
             )
+            if recent:
+                hints.append(
+                    "cognee-memory plugin capture looks LIVE (~/.cognee-plugin/**/pending "
+                    "written recently) — disable it or memory is double-written"
+                )
     except OSError:
         pass
     return hints
