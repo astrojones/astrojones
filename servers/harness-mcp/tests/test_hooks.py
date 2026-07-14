@@ -193,7 +193,44 @@ def test_session_start_injects_recall(repo, monkeypatch):
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "Durable-memory recall" in ctx
-    assert "canned:CHUNKS" in ctx
+    # Recall synthesizes over the graph (GRAPH_COMPLETION), not raw chunk retrieval.
+    assert "canned:GRAPH_COMPLETION" in ctx
+
+
+def _recall_search_payload(fake):
+    """The recorded POST /api/v1/search payload (the recall query), or None."""
+    for method, path, payload in fake.requests:
+        if method == "POST" and path == "/api/v1/search":
+            return payload
+    return None
+
+
+def test_session_start_recall_scoped_to_onboarded_dataset(repo, monkeypatch):
+    """When onboarded, recall queries the project's own dataset, not the span-all scope."""
+    from repo_agent_harness import paths
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.chdir(repo)
+    paths.cognee_onboarded_file(str(repo)).write_text(json.dumps({"dataset": "proj-x"}), encoding="utf-8")
+    fake = FakeCognee(datasets=["proj-x"])
+    agent_hooks.session_start({}, client=_wired_client(fake))
+    assert _recall_search_payload(fake).get("datasets") == ["proj-x"]
+
+
+def test_session_start_recall_spans_all_when_not_onboarded(repo, monkeypatch):
+    """No marker -> no dataset scope (user's default span-all), preserving multi-repo projects."""
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.chdir(repo)
+    fake = FakeCognee(datasets=["agent_sessions"])
+    agent_hooks.session_start({}, client=_wired_client(fake))
+    assert "datasets" not in _recall_search_payload(fake)
+
+
+def test_recall_lines_keeps_long_completion():
+    """A synthesized GRAPH_COMPLETION answer must not be clipped at the old 300-char cap."""
+    long = "x" * 900
+    assert agent_hooks._recall_lines([{"text": long}]) == [long]
 
 
 def test_session_start_silent_when_unconfigured(repo, monkeypatch):

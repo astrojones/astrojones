@@ -242,11 +242,14 @@ def pre_compact(data: dict) -> dict:
 # SessionStart recall: the ONE hook allowed a network call, bounded and fail-open. Every
 # other hook stays enqueue-only/local by hard rule — a turn must never block on cognee.
 _RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
-# Once per session, so a few seconds is acceptable; a live remote roundtrip (TLS + login +
-# CHUNKS retrieval) measures ~3s cold, hence 5s rather than a knife's-edge 3.
-_RECALL_TIMEOUT_S = 5.0
+# Once per session, so a few seconds is acceptable. Recall uses GRAPH_COMPLETION (graph
+# retrieval + server-side LLM synthesis), heavier than a raw chunk fetch; a live cold
+# roundtrip (TLS + login + synthesis) can run ~5-7s, hence 8s rather than the old 5.
+_RECALL_TIMEOUT_S = 8.0
 _RECALL_TOP_K = 5
-_RECALL_LINE_CHARS = 300
+# A GRAPH_COMPLETION answer is one synthesized paragraph, not a short chunk — keep it whole
+# (the section as a whole is still budgeted to 9000 chars in session_start).
+_RECALL_LINE_CHARS = 1200
 _RECALL_MAX_LINES = 8
 
 
@@ -315,8 +318,15 @@ def _symbol_lines(result: object) -> list[str]:
     return lines
 
 
-def _recall_section(name: str, client: CogneeClient | None) -> str | None:
+def _recall_section(name: str, dataset: str | None, client: CogneeClient | None) -> str | None:
     """Bounded, fail-open durable-memory recall; returns the section text or ``None``.
+
+    ``dataset`` scopes the query to the project's own cognee dataset (from the onboarding
+    marker); ``None`` spans the user's default scope (every dataset), the fallback for repos
+    not yet onboarded and for multi-repo projects that share one dataset.
+
+    Uses GRAPH_COMPLETION, which returns a synthesized answer over the graph — CHUNKS instead
+    surfaces raw captured chatter (e.g. a stored "Got it.") rather than distilled knowledge.
 
     ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
     the caller simply omits the section rather than aborting session start.
@@ -332,7 +342,7 @@ def _recall_section(name: str, client: CogneeClient | None) -> str | None:
     if not c.configured:
         return None
     query = f"Project {name}: recent work, decisions, open threads, and gotchas"
-    inp = MemSearchIn(query=query, search_type="CHUNKS", dataset=None, top_k=_RECALL_TOP_K)
+    inp = MemSearchIn(query=query, search_type="GRAPH_COMPLETION", dataset=dataset, top_k=_RECALL_TOP_K)
     timeout = float(os.environ.get(_RECALL_TIMEOUT_ENV, _RECALL_TIMEOUT_S))
     try:
         out = asyncio.run(asyncio.wait_for(mem.search(inp, client=c), timeout))
@@ -375,8 +385,10 @@ def session_start(data: dict, client: CogneeClient | None = None) -> dict:
         if lines:
             sections.append(f"Repo symbol map ({name}):\n- " + "\n- ".join(lines))
 
-    # [2] Durable-memory recall — contributes nothing when unconfigured/unreachable/empty.
-    recall = _recall_section(name, client)
+    # [2] Durable-memory recall — scoped to the project's own dataset when onboarded (the
+    # marker records it), else the user's default span-all scope. Contributes nothing when
+    # unconfigured/unreachable/empty.
+    recall = _recall_section(name, paths.onboarded_dataset(repo), client)
     if recall:
         sections.append(recall)
 

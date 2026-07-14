@@ -72,6 +72,23 @@ def is_cognee_onboarded(root: str) -> bool:
     return True
 
 
+def onboarded_dataset(root: str) -> str | None:
+    """The project dataset recorded at onboarding, or None if unmarked/unreadable.
+
+    Written by mark_cognee_onboarded(dataset=…). Lets session-start recall scope to the
+    project's own dataset instead of fanning across every dataset; None means "not
+    recorded", so the caller falls back to the user's default (span-all) scope — which is
+    what un-onboarded and multi-repo-shared-dataset repos rely on. Fail-closed to None.
+    """
+    try:
+        with cognee_onboarded_file(root).open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    ds = data.get("dataset") if isinstance(data, dict) else None
+    return ds if isinstance(ds, str) and ds else None
+
+
 def mark_cognee_onboarded(root: str, **meta: object) -> None:
     """Write the onboarding marker, recording the epoch time plus any provided metadata."""
     payload = {"onboarded_at": time.time(), **meta}
