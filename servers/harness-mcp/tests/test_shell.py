@@ -118,3 +118,24 @@ def test_run_streaming_kills_orphan_grandchild():
         time.sleep(0.05)
     with pytest.raises(ProcessLookupError):
         os.kill(grandchild_pid, 0)
+
+
+def test_child_env_strips_harness_venv(monkeypatch):
+    """The harness's own venv (VIRTUAL_ENV + its bin on PATH) must not reach children."""
+    venv = "/opt/harness/.venv"
+    monkeypatch.setenv("VIRTUAL_ENV", venv)
+    monkeypatch.setenv("UV_PROJECT", "/opt/harness")
+    monkeypatch.setenv("PATH", os.pathsep.join([venv + "/bin", "/usr/bin", "/bin"]))
+    env = shell._child_env()
+    assert "VIRTUAL_ENV" not in env
+    assert "UV_PROJECT" not in env
+    path_parts = env["PATH"].split(os.pathsep)
+    assert venv + "/bin" not in path_parts
+    assert "/usr/bin" in path_parts and "/bin" in path_parts
+
+
+def test_run_does_not_leak_virtual_env(monkeypatch):
+    """A spawned child sees no inherited VIRTUAL_ENV, so tools bind to the target env."""
+    monkeypatch.setenv("VIRTUAL_ENV", "/opt/harness/.venv")
+    res = shell.run([sys.executable, "-c", "import os; print(os.environ.get('VIRTUAL_ENV', 'UNSET'))"])
+    assert res.stdout.strip() == "UNSET"

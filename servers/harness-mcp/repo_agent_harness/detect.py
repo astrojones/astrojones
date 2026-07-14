@@ -75,17 +75,17 @@ def _pyproject_tools(pyproject: Path) -> set[str]:
 
 
 def _runner(tool: str, config_dir: Path) -> list[str] | None:
-    """Resolve how to invoke ``tool``: global PATH, then ``uv run``, else None.
+    """Resolve how to invoke ``tool``: the target project's ``uv`` env, then global PATH.
 
-    Prefers the tool on the global PATH. Otherwise, if ``config_dir`` has a
-    ``pyproject.toml`` and ``uv`` is available, returns ``["uv", "run", tool]`` so
-    venv-local tools (``ty``/``mypy``/``pytest``) still run. Returns ``None`` when the
-    tool cannot be resolved.
+    Prefers ``uv run --project <config_dir>`` when ``config_dir`` has a ``pyproject.toml``
+    and ``uv`` is available, so venv-local tools (``ty``/``mypy``/``pytest``) run in the
+    *target* repo's environment rather than the harness's own (whose venv is scrubbed from
+    :func:`shell.which` anyway). Falls back to the tool on the global PATH, else ``None``.
     """
+    if (config_dir / "pyproject.toml").is_file() and shell.which("uv"):
+        return ["uv", "run", "--project", str(config_dir), tool]
     if shell.which(tool):
         return [tool]
-    if (config_dir / "pyproject.toml").is_file() and shell.which("uv"):
-        return ["uv", "run", tool]
     return None
 
 

@@ -54,11 +54,14 @@ def test_typecheck_uses_detected_ty_in_package_dir(ty_repo, monkeypatch):
     assert out["skipped"] is False
     assert len(rec.calls) == 1
     call = rec.calls[0]
-    assert call["argv"][:2] == ["ty", "check"]
+    pkg = ty_repo / "servers" / "svc"
+    # Bound to the package's own uv env (not the harness's), then the detected tool.
+    assert call["argv"][:4] == ["uv", "run", "--project", str(pkg)]
+    assert call["argv"][4:6] == ["ty", "check"]
     # path relativized to the package dir
     assert "mod.py" in call["argv"]
     assert "servers/svc/mod.py" not in call["argv"]
-    assert Path(call["cwd"]) == ty_repo / "servers" / "svc"
+    assert Path(call["cwd"]) == pkg
     assert "ty check" in out["command"]
 
 
@@ -86,8 +89,10 @@ def test_lint_uses_detected_ruff_in_package_dir(ty_repo, monkeypatch):
     verify.lint_changed(str(ty_repo))
 
     assert len(rec.calls) == 1
-    assert rec.calls[0]["argv"][:2] == ["ruff", "check"]
-    assert Path(rec.calls[0]["cwd"]) == ty_repo / "servers" / "svc"
+    pkg = ty_repo / "servers" / "svc"
+    assert rec.calls[0]["argv"][:4] == ["uv", "run", "--project", str(pkg)]
+    assert rec.calls[0]["argv"][4:6] == ["ruff", "check"]
+    assert Path(rec.calls[0]["cwd"]) == pkg
 
 
 def test_typecheck_uv_fallback_when_not_on_path(ty_repo, monkeypatch):
@@ -99,8 +104,9 @@ def test_typecheck_uv_fallback_when_not_on_path(ty_repo, monkeypatch):
 
     verify.typecheck_changed(str(ty_repo))
 
-    assert rec.calls[0]["argv"][:4] == ["uv", "run", "ty", "check"]
-    assert Path(rec.calls[0]["cwd"]) == ty_repo / "servers" / "svc"
+    pkg = ty_repo / "servers" / "svc"
+    assert rec.calls[0]["argv"][:6] == ["uv", "run", "--project", str(pkg), "ty", "check"]
+    assert Path(rec.calls[0]["cwd"]) == pkg
 
 
 @pytest.fixture
@@ -135,7 +141,9 @@ def test_typecheck_groups_by_governing_config_dir(two_pkg_repo, monkeypatch):
     assert cwds == {two_pkg_repo / "servers" / "a", two_pkg_repo / "servers" / "b"}
     # each call's paths are relativized to its own package dir
     for call in rec.calls:
-        assert call["argv"][:2] == ["ty", "check"]
+        assert call["argv"][:2] == ["uv", "run"]
+        assert call["argv"][3] == call["cwd"]  # --project binds to that group's config dir
+        assert call["argv"][4:6] == ["ty", "check"]
         assert call["argv"][-1] == "mod.py"
     # merged command mentions both groups
     assert out["command"].count("ty check") == 2

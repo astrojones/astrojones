@@ -106,7 +106,15 @@ def test_runner_falls_back_to_uv_run(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(detect.shell, "which", which)
     argv = detect._runner("ty", tmp_path)
-    assert argv == ["uv", "run", "ty"]
+    assert argv == ["uv", "run", "--project", str(tmp_path), "ty"]
+
+
+def test_runner_prefers_uv_project_over_global_tool(tmp_path: Path, monkeypatch):
+    """A uv project binds tools to its own env even when the bare tool is on global PATH."""
+    _write(tmp_path / "pyproject.toml", "[project]\nname='x'\n")
+    monkeypatch.setattr(detect.shell, "which", lambda t: "/usr/bin/" + t)
+    argv = detect._runner("pytest", tmp_path)
+    assert argv == ["uv", "run", "--project", str(tmp_path), "pytest"]
 
 
 def test_runner_none_when_uninstalled_and_no_uv(tmp_path: Path, monkeypatch):

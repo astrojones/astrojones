@@ -10,6 +10,7 @@ import subprocess
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_TIMEOUT = 20
 MAX_OUTPUT_CHARS = 20_000
@@ -31,9 +32,35 @@ class Result:
         return self.code == 0 and not self.timed_out
 
 
+def _child_env() -> dict[str, str]:
+    """A copy of the environment with the harness's OWN virtualenv stripped out.
+
+    The MCP server runs under ``uv run``, which exports ``VIRTUAL_ENV`` and prepends its
+    ``.venv/bin`` to ``PATH``. If children inherited that, every tool the harness shells
+    out for a target repo — pytest, ruff, ty — would resolve to the harness's venv and
+    import the harness's *own* installed package instead of the target's, verifying the
+    wrong code. Stripping the leak makes children bind to the target repo's environment.
+    """
+    env = dict(os.environ)
+    venv = env.pop("VIRTUAL_ENV", None)
+    for key in ("UV_PROJECT", "UV_ACTIVE"):
+        env.pop(key, None)
+    if venv:
+        venv_bin = str(Path(venv) / "bin")
+        env["PATH"] = os.pathsep.join(
+            p for p in env.get("PATH", "").split(os.pathsep) if p and str(Path(p)) != venv_bin
+        )
+    return env
+
+
 def which(tool: str) -> str | None:
-    """Return the resolved path of an executable, or ``None`` if absent."""
-    return shutil.which(tool)
+    """Return the resolved path of an executable, or ``None`` if absent.
+
+    Resolves against the *scrubbed* PATH (:func:`_child_env`), so the harness never
+    detects a tool that lives only in its own virtualenv — detection matches the
+    environment children actually run in.
+    """
+    return shutil.which(tool, path=_child_env().get("PATH"))
 
 
 def truncate(text: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
@@ -60,6 +87,7 @@ def run(
             timeout=timeout,
             check=False,
             start_new_session=True,
+            env=_child_env(),
         )
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
@@ -104,6 +132,7 @@ def run_streaming(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=_child_env(),
         )
     except FileNotFoundError:
         return Result(127, "", f"command not found: {cmd[0]}", False)
