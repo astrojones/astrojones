@@ -82,6 +82,7 @@ def run(
         proc = subprocess.run(
             cmd,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,  # never the caller's stdin: under MCP stdio that's the protocol pipe
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -129,6 +130,7 @@ def run_streaming(
         proc = subprocess.Popen(  # noqa: S603
             cmd,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,  # never the caller's stdin: under MCP stdio that's the protocol pipe
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

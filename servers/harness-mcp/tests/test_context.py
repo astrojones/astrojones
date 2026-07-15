@@ -112,6 +112,53 @@ def test_search_text_finds_and_redacts(repo):
     assert any(m["path"] == "src/payment.py" for m in out["matches"])
 
 
+def test_search_text_rg_always_gets_a_path(repo, monkeypatch):
+    """Every rg invocation must carry an explicit path scope.
+
+    Pathless rg sniffs stdin — under an MCP stdio server that's the protocol pipe,
+    so every search hung to timeout and returned empty.
+    """
+    calls = []
+
+    def fake_streaming(args, **_kw):
+        calls.append(args)
+        return context.shell.Result(0, "", "", False)
+
+    monkeypatch.setattr(context.shell, "which", lambda tool: "/fake/rg")
+    monkeypatch.setattr(context.shell, "run_streaming", fake_streaming)
+    context.search_text(str(repo), "charge")
+    context.search_text(str(repo), "-charge", paths=["src"])
+    assert calls[0][-2:] == ["--", "./"]
+    assert calls[1][-2:] == ["--", "src"]
+    assert "-e" in calls[1]  # a leading-dash pattern must not parse as a flag
+
+
+def test_search_text_strips_cwd_prefix(repo):
+    """Scoping rg to './' must not leak a './' prefix into result paths."""
+    out = context.search_text(str(repo), "charge")
+    assert all(not m["path"].startswith("./") for m in out["matches"])
+
+
+def test_search_text_py_fallback_supports_regex(repo, monkeypatch):
+    monkeypatch.setattr(context.shell, "which", lambda tool: None)
+    out = context.search_text(str(repo), "charge|doesnotexist")
+    assert any(m["path"] == "src/payment.py" for m in out["matches"])
+
+
+def test_search_text_py_fallback_invalid_regex_is_literal(repo, monkeypatch):
+    monkeypatch.setattr(context.shell, "which", lambda tool: None)
+    out = context.search_text(str(repo), "charge(")
+    assert any(m["path"] == "src/payment.py" for m in out["matches"])
+
+
+def test_search_text_finds_submodule_content(repo, tmp_path):
+    from test_git import _add_submodule
+
+    _add_submodule(repo, tmp_path)
+    out = context.search_text(str(repo), "inner = 1")
+    assert any(m["path"] == "vendor/sub/inner.py" for m in out["matches"])
+
+
 def test_relevant_files(repo):
     out = context.relevant_files(str(repo), "fix payment charge bug")
     paths = [f["path"] for f in out["files"]]

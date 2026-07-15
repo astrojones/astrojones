@@ -282,15 +282,17 @@ def search_text(root: str, pattern: str, paths: list[str] | None = None, limit: 
     cfg = _secrets.load(root)
     matches: list[dict] = []
     if shell.which("rg"):
-        args = ["rg", "--line-number", "--no-heading", "--color=never", "-m", str(limit + 5), pattern]
-        if paths:
-            args += paths
+        # -e guards leading-dash patterns; the explicit path scope keeps rg off its
+        # stdin heuristic (pathless rg reads stdin — under MCP stdio, the protocol pipe).
+        args = ["rg", "--line-number", "--no-heading", "--color=never", "-m", str(limit + 5), "-e", pattern]
+        args += ["--", *(paths or ["./"])]
         res = shell.run_streaming(args, cwd=root, timeout=20, max_lines=limit + 5)
         for line in res.stdout.splitlines():
             parts = line.split(":", 2)
             if len(parts) < _RG_FIELD_COUNT:
                 continue
             fp, ln, preview = parts
+            fp = fp.removeprefix("./")
             if _secrets.is_secret_path(fp, cfg):
                 continue
             matches.append(
@@ -308,7 +310,10 @@ def search_text(root: str, pattern: str, paths: list[str] | None = None, limit: 
 
 
 def _search_text_py(root, pattern, paths, limit, cfg) -> list[dict]:
-    rx = re.compile(re.escape(pattern))
+    try:
+        rx = re.compile(pattern)  # the tool contract is "substring or ripgrep pattern"
+    except re.error:
+        rx = re.compile(re.escape(pattern))
     out: list[dict] = []
     for f in paths or git.ls_files(root):
         if _secrets.is_secret_path(f, cfg):

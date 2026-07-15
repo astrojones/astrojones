@@ -4,6 +4,7 @@ import os
 import sys
 import textwrap
 import time
+from contextlib import contextmanager
 
 import pytest
 from repo_agent_harness import shell
@@ -139,3 +140,37 @@ def test_run_does_not_leak_virtual_env(monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", "/opt/harness/.venv")
     res = shell.run([sys.executable, "-c", "import os; print(os.environ.get('VIRTUAL_ENV', 'UNSET'))"])
     assert res.stdout.strip() == "UNSET"
+
+
+@contextmanager
+def _pipe_stdin():
+    """Replace fd 0 with a never-written pipe — what children see under an MCP stdio server."""
+    saved = os.dup(0)
+    r, w = os.pipe()
+    os.dup2(r, 0)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 0)
+        for fd in (saved, r, w):
+            os.close(fd)
+
+
+def test_run_detaches_child_stdin():
+    """A stdin-reading child must see EOF, never the parent's stdin.
+
+    Under an MCP stdio server fd 0 is the protocol pipe; an inheriting child (cat here,
+    rg's stdin heuristic in production) blocks until timeout and could eat protocol bytes.
+    """
+    with _pipe_stdin():
+        res = shell.run(["cat"], timeout=5)
+    assert res.ok
+    assert res.stdout == ""
+
+
+def test_run_streaming_detaches_child_stdin():
+    with _pipe_stdin():
+        res = shell.run_streaming(["cat"], timeout=5, max_lines=5)
+    assert res.timed_out is False
+    assert res.code == 0
+    assert res.stdout == ""
