@@ -118,7 +118,8 @@ def _tracked_sources(root: str) -> list[str]:
     """Tracked files with an indexed-language extension (git ls-files; ignored files excluded)."""
     try:
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["git", "ls-files", "-z"],  # noqa: S607 - resolved from PATH like every other git call here
+            # --recurse-submodules: index submodule sources too, not just the gitlink entry
+            ["git", "ls-files", "-z", "--recurse-submodules"],  # noqa: S607 - resolved from PATH like every other git call here
             cwd=root,
             capture_output=True,
             timeout=_GIT_TIMEOUT_S,

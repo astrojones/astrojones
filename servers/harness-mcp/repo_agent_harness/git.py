@@ -90,8 +90,11 @@ def changed_files(root: str, include_untracked: bool = True) -> list[str]:
 
 
 def ls_files(root: str, pattern: str | None = None) -> list[str]:
-    """List git-tracked files, optionally filtered by a path pattern."""
-    args = ["git", "ls-files"]
+    """List git-tracked files, optionally filtered by a path pattern.
+
+    Recurses into initialized submodules so their files index like any other path.
+    """
+    args = ["git", "ls-files", "--recurse-submodules"]
     if pattern:
         args += ["--", pattern]
     out = shell.run(args, cwd=root, timeout=20)
@@ -103,12 +106,15 @@ def list_files(root: str, include_untracked: bool = True) -> list[str]:
 
     Used for introspection (e.g. language detection) so a freshly scaffolded or
     mid-work repo still reports accurately, not just its committed state.
+    Tracked files recurse into initialized submodules; the untracked listing runs
+    separately because --recurse-submodules and --others are mutually exclusive.
     """
-    args = ["git", "ls-files", "--cached"]
+    out = shell.run(["git", "ls-files", "--cached", "--recurse-submodules"], cwd=root, timeout=20)
+    names = {line for line in out.stdout.splitlines() if line.strip()}
     if include_untracked:
-        args += ["--others", "--exclude-standard"]
-    out = shell.run(args, cwd=root, timeout=20)
-    return sorted({line for line in out.stdout.splitlines() if line.strip()})
+        extra = shell.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=root, timeout=20)
+        names |= {line for line in extra.stdout.splitlines() if line.strip()}
+    return sorted(names)
 
 
 def diff_current(root: str, context_lines: int = 3, max_chars: int = 20_000) -> dict:

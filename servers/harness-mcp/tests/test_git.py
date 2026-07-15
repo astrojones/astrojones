@@ -85,4 +85,44 @@ def test_repo_id_differs_per_worktree(repo, tmp_path):
     )
     main_root = git.repo_root(cwd=str(repo))
     wt_root = git.repo_root(cwd=str(wt))
+    assert main_root is not None
+    assert wt_root is not None
     assert paths.repo_id(wt_root) != paths.repo_id(main_root)
+
+
+def _add_submodule(repo, tmp_path):
+    """Side repo committed as a submodule of `repo` at vendor/sub, with one tracked file."""
+    src = tmp_path / "subsrc"
+    src.mkdir()
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "t@t.t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", *args], cwd=src, check=True, capture_output=True)
+    (src / "inner.py").write_text("inner = 1\n")
+    subprocess.run(["git", "add", "inner.py"], cwd=src, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "sub init"], cwd=src, check=True, capture_output=True)
+    # local-path submodule clones need the file protocol re-enabled (off since git 2.38.1)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", str(src), "vendor/sub"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "add submodule"], cwd=repo, check=True, capture_output=True)
+
+
+def test_ls_files_recurses_into_submodules(repo, tmp_path):
+    _add_submodule(repo, tmp_path)
+    files = git.ls_files(str(repo))
+    assert "vendor/sub/inner.py" in files
+    assert "vendor/sub" not in files  # the gitlink entry is replaced by its contents
+
+
+def test_list_files_recurses_into_submodules(repo, tmp_path):
+    _add_submodule(repo, tmp_path)
+    (repo / "scratch.py").write_text("x = 1\n")
+    files = git.list_files(str(repo))
+    assert "vendor/sub/inner.py" in files
+    assert "scratch.py" in files  # untracked listing still works alongside recursion
