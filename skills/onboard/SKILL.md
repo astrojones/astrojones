@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Use once per project (a project may span multiple repos that share one dataset) that has the repo-agent-harness to build its durable project memory in the cognee graph — the one-time onboarding that derives a type ontology from the repo's own symbol map and structure, curates and cost-gates the initial memories (tech stack, commands, conventions, structure), ingests them into the project dataset under user confirmation, and marks the repo onboarded so future sessions stop nudging. Symbol navigation is already live from auto-onboarding; this skill seeds memory, not Serena. Invoked as `/astrojones:onboard`.
+description: Use once per project (a project may span multiple repos that share one dataset) that has the repo-agent-harness to build its durable project memory in the cognee graph — the one-time onboarding that derives a type ontology from the repo's own symbol map and structure, curates and cost-gates the initial memories (tech stack, commands, conventions, structure), ingests them into the project dataset under user confirmation, and marks the repo onboarded so future sessions stop nudging. Also generates or updates the repo's `CLAUDE.md` (tech stack, commands, conventions, structure) as `/init` would, mirroring the same curated content into cognee memory. Symbol navigation is already live from auto-onboarding; this skill seeds memory, not Serena. Invoked as `/astrojones:onboard`.
 argument-hint: [project-name] [--noninteractive]
 ---
 
@@ -59,7 +59,7 @@ and its paired `prompt` ("type must be EXACTLY ONE of: …"). Pinning first is t
 stops ad-hoc type sprawl at extraction time instead of forcing a graph-tune cleanup later. Use the
 **same** `ontology_key` for every ingest below.
 
-### 4. Build curated onboarding memories
+### 4. Build curated onboarding memories and `CLAUDE.md`
 Write compact, high-value items (a few hundred to a few thousand tokens each — like
 `astrojones-mem-ingest-wisely`), not raw file dumps:
 - **tech_stack** — languages, frameworks, runtimes, notable dependencies;
@@ -67,6 +67,22 @@ Write compact, high-value items (a few hundred to a few thousand tokens each —
 - **conventions** — code style, commit format, naming, testing method the repo actually uses;
 - **structure/entrypoints** — the important paths and where execution starts.
 Curate: what genuinely earns graph residency, not boilerplate.
+
+Write this same curated content to `CLAUDE.md` at the repo root — the job Claude Code's built-in
+`/init` normally does — inside a `<!-- astrojones:onboard:begin -->` / `<!-- astrojones:onboard:end -->`
+marker pair (this skill's own convention; distinct from `scaffold.py`'s `AGENTS.md`-specific
+section markers — don't reuse those):
+- **No `CLAUDE.md` exists** — create it with four sections inside the markers: `## Tech stack`,
+  `## Commands (build/test/lint/run)`, `## Conventions`, `## Structure & entrypoints`.
+- **`CLAUDE.md` exists with the markers** — replace only the content between them; leave
+  everything before/after untouched.
+- **`CLAUDE.md` exists without the markers** (pre-existing hand-written file) — append a new
+  marked block at the end; never overwrite or delete existing content.
+- **`CLAUDE.md` is a symlink** (e.g. to `AGENTS.md` — a common convention for sharing one file
+  across tools) — do not write through it. Skip this step; the symlink's target already carries
+  the repo's shared guidance, and writing through it would silently mutate that other file.
+Never delete `CLAUDE.md` or anything outside the markers — same non-destructive spirit as the
+note on prior manual onboarding below.
 
 ### 5. Cost gate — dry run
 Ingest into **the project's dataset** — named after the project, defaulting to this repo's
@@ -108,6 +124,10 @@ Retrieval is the acceptance test, not the 200 response. Run three `mem_search` q
 Pass: all three answer from the ingested content **and** the entity types collapse to the
 pinned set. Partial (chunks present, relations missing): the vocabulary is noisy — run
 `astrojones-graph-tune` and canary again.
+
+**CLAUDE.md check** — unless `CLAUDE.md` was a symlink (skipped by design, see step 4), read the
+file back and confirm the marker block is present, non-empty, and contains all four sections.
+Not a `mem_search` — a direct file read.
 
 ## Note on prior manual onboarding
 
