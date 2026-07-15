@@ -11,6 +11,10 @@
 #   4. Real `claude -p` end-to-end: claude calls repo_context_overview and reports the repo's
 #      languages (proves: Claude Code auto-connects the plugin's MCP server and the tool is
 #      callable from the model).
+# Layer 3 (optional, needs CLAUDE_CODE_OAUTH_TOKEN):
+#   5. Scenario-driven `claude -p` runs (docker/e2e_hooks.sh) proving Claude Code's own
+#      hook DISPATCH works — deny wins, state files written, additionalContext injected —
+#      asserted machine-readably by docker/e2e_verify.py (never on model prose).
 set -uo pipefail
 PLUGIN=/plugins/astrojones
 HARNESS=$PLUGIN/servers/harness-mcp
@@ -78,6 +82,13 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
         "Call the mcp__plugin_astrojones_repo-agent-harness__repo_context_overview tool with no arguments, then reply with EXACTLY one line: LANGUAGES=<the 'languages' array, comma-joined>." 2>&1) || true
   echo "  claude said: $(echo "$OUT" | tail -3)"
   echo "$OUT" | grep -qi 'python' && ok "e2e: claude called repo_context_overview" || no "e2e: no python in claude reply"
+else
+  echo "  skipped (set CLAUDE_CODE_OAUTH_TOKEN to run)"
+fi
+
+echo; echo "### TEST 5 (optional): claude -p hook-dispatch scenarios (needs CLAUDE_CODE_OAUTH_TOKEN)"
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  if bash "$PLUGIN/docker/e2e_hooks.sh"; then ok "e2e hook scenarios"; else no "e2e hook scenarios"; fi
 else
   echo "  skipped (set CLAUDE_CODE_OAUTH_TOKEN to run)"
 fi
