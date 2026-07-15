@@ -39,7 +39,8 @@ echo "$DEC" | grep -q '"permissionDecision":[[:space:]]*"deny"' && ok "hook deni
 echo; echo "### TEST 1b: all 6 hooks fire + return valid JSON + exit 0 (fail-open contract)"
 # Each hook is invoked exactly as Claude Code does — `python3 $PLUGIN/hooks/<name>.py`
 # with the event JSON on stdin — and must: exit 0, emit valid JSON, stay under the 10s
-# budget. session_start specifically must fail open (return {}) with no cognee creds.
+# budget. session_start specifically must fail open with no cognee creds: recall contributes
+# nothing, leaving the deterministic onboarding nudge (fresh container = never onboarded).
 # post_tool_use must emit its verify nudge. This is the regression check that the hook
 # layer — which we put a lot of thought into — keeps working in a vanilla env.
 fire_hook() {
@@ -56,7 +57,7 @@ fire_hook() {
   fi
 }
 cd "$PLUGIN"
-fire_hook session_start.py      '{"hook_event_name":"SessionStart","cwd":"'"$PLUGIN"'","source":"startup"}' '^{}$'
+fire_hook session_start.py      '{"hook_event_name":"SessionStart","cwd":"'"$PLUGIN"'","source":"startup"}' 'onboarded into durable memory'
 fire_hook pre_tool_use.py       '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' '^{}$'
 fire_hook post_tool_use.py      '{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"'"$PLUGIN"'/README.md","old_string":"a","new_string":"b"},"tool_response":{"success":true}}' 'repo_verify_changed'
 fire_hook user_prompt_submit.py '{"hook_event_name":"UserPromptSubmit","prompt":"fix the bug in app.py"}' ''
