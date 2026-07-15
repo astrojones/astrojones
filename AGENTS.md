@@ -9,9 +9,13 @@ including Serena's semantic code tools, proxied as `serena_*` and launched on fi
 Agents without an MCP client use the same operations as CLI tools under `agent/tools/`.
 
 ### First, in a new session
-- Call **`serena_initial_instructions`** before symbol work (Serena's usage manual is not
-  injected automatically through the proxy), and **`serena_onboarding`** once per repo —
-  it sets up Serena's project memories so symbol lookups work.
+- **Onboarding is automatic.** The harness seeds Serena's gate-flag at MCP connect, before
+  you act — so symbol navigation is ready immediately. Just start navigating by symbol; no
+  manual bootstrap call is required.
+- **Durable project memory** is populated once per repo via a confirmed cognee ingest — run
+  **`/astrojones:onboard`** to curate and load it (it cost-gates and asks before spending).
+- `serena_initial_instructions` remains available if you want Serena's usage manual, but it
+  is no longer a mandatory first step.
 
 ### Navigation & reading
 - Use **Serena** first for symbols: `serena_find_symbol`, `serena_find_referencing_symbols`,
