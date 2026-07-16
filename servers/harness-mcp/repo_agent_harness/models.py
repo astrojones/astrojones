@@ -74,7 +74,9 @@ class MemRememberIn(BaseModel):
     """Input model for mem_remember."""
 
     text: str = Field(..., description="The fact/observation to store durably")
-    dataset: str = Field("agent_sessions", description="Target dataset name")
+    dataset: str | None = Field(
+        None, description="Target dataset name; None resolves via the conventions table (mem.resolve_dataset)"
+    )
     node_set: list[str] | None = Field(None, description="Category tags, e.g. ['project_docs']")
     metadata: dict | None = Field(None, description="Optional key/value context folded into the text")
 
@@ -186,6 +188,30 @@ class MemMigrateResult(BaseModel):
     dataset: str
     node_set: list[str]
     dry_run: bool = False
+    estimate: MemIngestEstimate | None = None
+
+
+class ClaudeMemMigrateResult(BaseModel):
+    """migrate-claude-mem outcome: the dry-run readiness report or per-project shipped totals.
+
+    Selection counters (observations/summaries/sessions/per_type) describe everything the
+    filters matched; estimated_docs/per_project/estimate describe only what is still pending
+    after ledger dedup — so a fully-resumed run reports the selection with 0 pending.
+    """
+
+    dataset: str
+    granularity: str
+    db: str
+    dry_run: bool = True
+    observations: int = 0
+    summaries: int = 0
+    sessions: int = 0
+    per_project: dict[str, int] = Field(default_factory=dict, description="pending/shipped docs per project")
+    per_type: dict[str, int] = Field(default_factory=dict, description="selected source rows per type")
+    estimated_docs: int = 0
+    skipped_dedup: int = 0
+    shipped: int = 0
+    node_set: list[str] = Field(default_factory=list, description="base tags; a project: tag is added per batch")
     estimate: MemIngestEstimate | None = None
 
 
@@ -307,6 +333,20 @@ class InFlightCall(BaseModel):
     stalled: bool = False
 
 
+class HookHeartbeat(BaseModel):
+    """Last successful run of one Claude Code hook event (or async job like memify).
+
+    ``last_success_at is None`` means "never ran" — surfaced explicitly because the hook
+    shims fail open by contract, so a silently dead hook leaves no other trace. ``count``
+    is best-effort/lossy (see paths.stamp_hook_heartbeat); only ts/existence is contractual.
+    """
+
+    event: str
+    last_success_at: str | None = Field(None, description="ISO-8601 UTC timestamp; None = never ran")
+    age_s: float | None = None
+    count: int = 0
+
+
 class HealthSnapshot(BaseModel):
     """A repository health snapshot with freshness provenance."""
 
@@ -319,4 +359,7 @@ class HealthSnapshot(BaseModel):
     config_error: str | None = None
     in_flight: list[InFlightCall] = Field(
         default_factory=list, description="harness tool calls executing on the Serena gateway at snapshot time"
+    )
+    hook_heartbeats: list[HookHeartbeat] = Field(
+        default_factory=list, description="per-hook-event last-success stamps; last_success_at=None means never ran"
     )

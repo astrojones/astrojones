@@ -82,3 +82,49 @@ def test_is_cognee_onboarded_false_on_invalid_json(tmp_path, monkeypatch):
     monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path / "harness"))
     paths.cognee_onboarded_file(str(tmp_path)).write_text("{ not json")
     assert paths.is_cognee_onboarded(str(tmp_path)) is False
+
+
+# ------------------------------------------------------------------- heartbeats
+
+
+def test_stamp_and_read_hook_heartbeat_roundtrip(tmp_path):
+    root = str(tmp_path)
+    before = __import__("time").time()
+    paths.stamp_hook_heartbeat(root, "stop")
+    paths.stamp_hook_heartbeat(root, "stop")
+    beats = paths.read_hook_heartbeats(root)
+    assert "stop" in beats
+    assert beats["stop"]["ts"] >= before
+    # count is best-effort under parallel writers; only existence is contractual.
+    assert beats["stop"]["count"] >= 1
+
+
+def test_read_hook_heartbeats_excludes_garbage_marker(tmp_path):
+    root = str(tmp_path)
+    paths.stamp_hook_heartbeat(root, "stop")
+    paths.hook_heartbeat_file(root, "pre-tool-use").write_text("{not json", encoding="utf-8")
+    beats = paths.read_hook_heartbeats(root)
+    assert "stop" in beats
+    assert "pre-tool-use" not in beats
+
+
+def test_read_hook_heartbeats_fail_open_without_dir(tmp_path):
+    assert paths.read_hook_heartbeats(str(tmp_path)) == {}
+
+
+def test_stamp_hook_heartbeat_accepts_job_names(tmp_path):
+    """Job runs (e.g. memify) reuse the same stamps so repo_health shows one freshness view."""
+    root = str(tmp_path)
+    paths.stamp_hook_heartbeat(root, "memify")
+    assert "memify" in paths.read_hook_heartbeats(root)
+
+
+def test_hook_events_lists_the_six_wired_events():
+    assert paths.HOOK_EVENTS == (
+        "pre-tool-use",
+        "post-tool-use",
+        "user-prompt-submit",
+        "session-start",
+        "stop",
+        "pre-compact",
+    )

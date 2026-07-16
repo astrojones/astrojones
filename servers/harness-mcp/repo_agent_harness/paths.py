@@ -51,6 +51,74 @@ def perception_touched_file(root: str) -> Path:
     return repo_state_dir(root) / PERCEPTION_TOUCHED_FILE
 
 
+# Hook/job heartbeats under repo_state_dir()/heartbeats/ — one file per event so parallel
+# hooks for *different* events never contend. A stamp means "this handler (or async job)
+# ran to completion"; it is the observability answer to the silent-hook-death incident
+# (the shims fail open by design, so success must leave a trace somewhere).
+HEARTBEAT_DIR = "heartbeats"
+HOOK_EVENTS = (
+    "pre-tool-use",
+    "post-tool-use",
+    "user-prompt-submit",
+    "session-start",
+    "stop",
+    "pre-compact",
+)
+
+
+def hook_heartbeat_file(root: str, event: str) -> Path:
+    """Path to one event's (or job's) heartbeat marker; parent dir created lazily."""
+    d = repo_state_dir(root) / HEARTBEAT_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{event}.json"
+
+
+def stamp_hook_heartbeat(root: str, event: str) -> None:
+    """Record a successful run of ``event`` as ``{"ts": epoch, "count": n}``.
+
+    Atomic via temp + os.replace (readers never see a torn file). ``count`` is
+    best-effort: parallel same-event stampers read-modify-write without a lock and
+    may lose increments — treat it as a lower bound (fine for thresholds like
+    "ran at least N times"); ``ts`` carries the freshness semantics, and tests
+    must only assert on ``ts``/existence. The event string is free-form on
+    purpose: async jobs (memify, migrations) stamp through the same helper so
+    repo_health shows hook and job freshness uniformly.
+    """
+    path = hook_heartbeat_file(root, event)
+    count = 0
+    try:
+        with path.open(encoding="utf-8") as f:
+            prev = json.load(f)
+        if isinstance(prev, dict):
+            count = int(prev.get("count", 0))
+    except (OSError, ValueError, TypeError):
+        count = 0
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"ts": time.time(), "count": count + 1}), encoding="utf-8")
+    tmp.replace(path)
+
+
+def read_hook_heartbeats(root: str) -> dict[str, dict]:
+    """All well-formed heartbeat markers as ``{event: {"ts": float, "count": int}}``.
+
+    Fail-open: a missing dir yields ``{}``; a garbage marker is simply excluded, so
+    consumers (health, session-start degradation warnings) treat it as "never ran".
+    """
+    try:
+        files = list((repo_state_dir(root) / HEARTBEAT_DIR).glob("*.json"))
+    except OSError:
+        return {}
+    beats: dict[str, dict] = {}
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("ts"), int | float):
+                beats[f.stem] = {"ts": float(data["ts"]), "count": int(data.get("count", 0))}
+        except (OSError, ValueError, TypeError):
+            continue
+    return beats
+
+
 # Cognee onboarding marker under repo_state_dir(). Records that this repo's memory graph has
 # been bootstrapped, so the daemon/hooks skip re-onboarding. Lives beside symbols.json, so it
 # is gitignored-by-construction (outside the working tree).
