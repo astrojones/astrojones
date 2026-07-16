@@ -29,6 +29,7 @@ class FakeCognee:
         self.ontologies: set[str] = set()
         self.data_items: dict[str, list[dict]] = {}  # dataset_id -> data entries (list/delete routes)
         self.exports: dict[str, str] = {}  # dataset_id -> canned markdown export
+        self.exports_raw = False  # serve exports as raw markdown instead of a JSON-encoded string
         self.requests: list[tuple[str, str, dict]] = []  # (method, path, payload-ish)
         self.logins = 0
         self._token_serial = 0
@@ -144,6 +145,11 @@ class FakeCognee:
             return httpx.Response(200, json={"status": "ok"})
         if m := re.fullmatch(r"/api/v1/activity/export/([^/]+)", path):
             self._record(request, {})
+            if self.exports_raw:
+                # The live endpoint reportedly returns the markdown verbatim.
+                return httpx.Response(
+                    200, text=self.exports.get(m.group(1), ""), headers={"content-type": "text/markdown"}
+                )
             # FastAPI JSON-encodes a str return value, so the markdown arrives as a JSON string.
             return httpx.Response(200, json=self.exports.get(m.group(1), ""))
         return None

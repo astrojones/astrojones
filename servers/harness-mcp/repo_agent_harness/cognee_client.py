@@ -13,6 +13,7 @@ exposes ``runInBackground``/``dataPerBatch``/``chunksPerBatch``; ``/health`` exi
 from __future__ import annotations
 
 import asyncio
+import json as _json  # aliased: ``request``/``_send`` take a ``json`` keyword parameter
 import os
 import time
 from http import HTTPStatus
@@ -225,12 +226,14 @@ class CogneeClient:
         data: dict[str, str | list[str]] | None = None,
         files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
         params: dict | None = None,
+        raw: bool = False,
     ) -> Json:
         """Send one API request and return the decoded JSON body.
 
         ``idempotent=True`` (reads only) enables bounded retries on transport errors and
         5xx; writes are never blind-retried — a duplicated ``/add`` is worse than a failed
         one. A 401 under bearer auth triggers exactly one token refresh + resend.
+        ``raw=True`` returns the body text verbatim instead of JSON-decoding.
         """
         if not self.configured:
             raise CogneeNotConfiguredError
@@ -259,11 +262,18 @@ class CogneeClient:
                 msg = f"cognee HTTP {resp.status_code} on {path}: {resp.text[:300]}"
                 raise CogneeError(msg, status=resp.status_code)
             self.circuit.record_success()
-            if not resp.content:
-                return None
-            return resp.json()
+            return self._decode_body(resp, raw=raw)
         msg = f"cognee unreachable after {attempts} attempt(s) on {path}: {last_exc}"
         raise CogneeUnavailableError(msg) from last_exc
+
+    @staticmethod
+    def _decode_body(resp: httpx.Response, *, raw: bool) -> Json:
+        """Success-path body decode: verbatim text when ``raw``, else JSON (empty body -> None)."""
+        if raw:
+            return resp.text
+        if not resp.content:
+            return None
+        return resp.json()
 
     async def _send(  # noqa: PLR0913 - forwards request()'s explicit payload slots verbatim
         self,
@@ -427,13 +437,24 @@ class CogneeClient:
             payload["datasetName"] = dataset
         return await self.request("POST", "/api/v1/improve", json=payload)
 
-    async def export_markdown(self, dataset_id: str) -> Json:
+    async def export_markdown(self, dataset_id: str) -> str:
         """GET /api/v1/activity/export/{dataset_id} — markdown audit/backup export (idempotent).
 
         The Paket-2 backup path: this deployment has no COGX endpoint, so the activity
-        export is the only server-side dump. The body arrives as a JSON-encoded string.
+        export is the only server-side dump. The body is read verbatim and handled
+        bimodally: a raw markdown body passes through untouched, while a JSON-encoded
+        string (FastAPI encoding a ``str`` return) is unwrapped.
         """
-        return await self.request("GET", f"/api/v1/activity/export/{dataset_id}", idempotent=True)
+        body = await self.request("GET", f"/api/v1/activity/export/{dataset_id}", idempotent=True, raw=True)
+        text = body if isinstance(body, str) else ""
+        if text.lstrip().startswith('"'):
+            try:
+                parsed = _json.loads(text)
+            except ValueError:
+                return text
+            if isinstance(parsed, str):
+                return parsed
+        return text
 
 
 # One shared client per process, mirroring the `_serena` gateway singleton in server.py:

@@ -224,3 +224,13 @@ async def test_export_markdown_is_an_idempotent_read():
     method, path, _ = next((m, p, pl) for m, p, pl in fake.requests if p.startswith("/api/v1/activity"))
     assert (method, path) == ("GET", "/api/v1/activity/export/id-kolbe")
     await client.aclose()
+
+
+async def test_export_markdown_handles_raw_markdown_body():
+    """A server that returns the markdown verbatim (not JSON-encoded) is handled too."""
+    fake = FakeCognee(datasets=["kolbe"])
+    fake.exports_raw = True
+    fake.exports["id-kolbe"] = "# kolbe activity\n- added"
+    client = CogneeClient(**fake.client_kwargs())
+    assert await client.export_markdown("id-kolbe") == "# kolbe activity\n- added"
+    await client.aclose()
