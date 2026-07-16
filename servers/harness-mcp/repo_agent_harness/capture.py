@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import sqlite3
 import time
 from typing import TYPE_CHECKING
 
-from repo_agent_harness import digest_providers, paths
+from repo_agent_harness import digest_providers, paths, secrets
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,8 +31,11 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
+# Ship target for NEW writes: the project's onboarded dataset when recorded, else this
+# fallback; node_set base is session_digest (replaced agent_actions). Local constants for
+# now — the mem.py constants table (stream S3) becomes the SSOT and the integrator re-points.
 CAPTURE_DATASET = "agent_sessions"
-CAPTURE_NODE_SET = ["agent_actions"]
+CAPTURE_NODE_SET = ["session_digest"]
 
 _BUSY_TIMEOUT_MS = 5000
 _MAX_PAYLOAD_CHARS = 8_000
@@ -60,10 +64,25 @@ def _connect(db: Path) -> sqlite3.Connection:
     return conn
 
 
+@functools.lru_cache(maxsize=32)
+def _secrets_cfg(root: str) -> secrets.SecretsConfig:
+    """Redaction config via the full resolution chain (repo overrides > home > defaults).
+
+    ``secrets.redact``'s default config knows only the builtin patterns; loading per-root
+    keeps repo-specific patterns effective at the capture boundary. Cached because enqueue
+    runs on the post-tool-use hot path and ``secrets.load`` probes the fs + parses yaml.
+    """
+    return secrets.load(root)
+
+
 def enqueue(root: str, event: str, payload: dict | None) -> None:
     """One INSERT-commit-close from a hook. Fail-open: never raises, never touches the network."""
     try:
-        text = json.dumps(payload or {})[:_MAX_PAYLOAD_CHARS]
+        # Redact before the row hits disk: digest and ship read the queue verbatim, so this
+        # is the single scrub point. A redaction failure falls into the blanket except below
+        # (row dropped) — safer than persisting an unscrubbed payload. Redact BEFORE the
+        # cap: truncating first could slice a secret at the boundary so no pattern matches.
+        text = secrets.redact(json.dumps(payload or {}), _secrets_cfg(root))[:_MAX_PAYLOAD_CHARS]
         with contextlib.closing(_connect(queue_db(root))) as conn, conn:
             conn.execute(
                 "INSERT INTO capture_queue (created_at, event, payload) VALUES (?, ?, ?)",
@@ -132,12 +151,52 @@ class BrainCapture:
         if not rows:
             return 0
         entries = [self._render(created_at, event, payload) for _, created_at, event, payload in rows]
-        digest = await digest_providers.digest(entries)
-        items = [digest] if digest else entries
-        await self._client.add(items, CAPTURE_DATASET, CAPTURE_NODE_SET, run_in_background=False)
-        await self._client.cognify(CAPTURE_DATASET, run_in_background=True)
+        result = await digest_providers.digest(entries)
+        dataset = paths.onboarded_dataset(self.root) or CAPTURE_DATASET
+        for node_set, docs in self._ship_groups(result, entries):
+            await self._client.add(docs, dataset, node_set, run_in_background=False)
+        await self._client.cognify(dataset, run_in_background=True)
+        # memify distills CODING_RULES and consolidates entities server-side. Enrichment,
+        # not shipping: a memify hiccup must never fail the drain (rows are already added),
+        # so it runs fail-open, and only a successful run stamps the job heartbeat.
+        with contextlib.suppress(Exception):
+            await self._client.memify(dataset, run_in_background=True)
+            paths.stamp_hook_heartbeat(self.root, "memify")
         await asyncio.to_thread(self._delete, [row_id for row_id, *_ in rows])
         return len(rows)
+
+    @staticmethod
+    def _ship_groups(
+        result: digest_providers.DigestResult | None, entries: list[str]
+    ) -> list[tuple[list[str], list[str]]]:
+        """(node_set, docs) batches: observations grouped per tag combination, else one plain doc.
+
+        Every branch fails open to shipping something — a digest outcome never loses rows.
+        """
+        if result is not None and result.observations:
+            observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            groups: dict[tuple[str, ...], list[str]] = {}
+            for obs in result.observations:
+                # sorted() canonicalizes the group key: identical concept sets in different
+                # order must batch together instead of splitting into separate add() calls.
+                node_set = (*CAPTURE_NODE_SET, f"type:{obs.type}", *(f"concept:{c}" for c in sorted(obs.concepts)))
+                groups.setdefault(node_set, []).append(BrainCapture._observation_doc(obs, observed_at))
+            return [(list(tags), docs) for tags, docs in groups.items()]
+        if result is not None and result.text:
+            return [(CAPTURE_NODE_SET, [result.text])]
+        return [(CAPTURE_NODE_SET, entries)]
+
+    @staticmethod
+    def _observation_doc(obs: digest_providers.DigestObservation, observed_at: str) -> str:
+        """Render one observation as a markdown doc (Observed: is future-proofing, see plan)."""
+        lines = [f"# {obs.type}: {obs.title}"]
+        lines += [f"- {fact}" for fact in obs.facts]
+        if obs.concepts:
+            lines.append("Concepts: " + ", ".join(obs.concepts))
+        if obs.files:
+            lines.append("Files: " + ", ".join(obs.files))
+        lines.append(f"Observed: {observed_at}")
+        return "\n".join(lines)
 
     def _fetch_batch(self) -> list[tuple[int, float, str, str]]:
         with contextlib.closing(_connect(queue_db(self.root))) as conn:
