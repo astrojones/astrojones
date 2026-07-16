@@ -66,7 +66,7 @@ def _connect(db: Path) -> sqlite3.Connection:
 
 @functools.lru_cache(maxsize=32)
 def _secrets_cfg(root: str) -> secrets.SecretsConfig:
-    """Redaction config via the full resolution chain (repo overrides > home > defaults).
+    """Redaction config via the resolution chain; file patterns merge onto the builtins, never replace them.
 
     ``secrets.redact``'s default config knows only the builtin patterns; loading per-root
     keeps repo-specific patterns effective at the capture boundary. Cached because enqueue
@@ -75,8 +75,11 @@ def _secrets_cfg(root: str) -> secrets.SecretsConfig:
     return secrets.load(root)
 
 
-def enqueue(root: str, event: str, payload: dict | None) -> None:
-    """One INSERT-commit-close from a hook. Fail-open: never raises, never touches the network."""
+def enqueue(root: str, event: str, payload: dict | None) -> bool:
+    """One INSERT-commit-close from a hook. Fail-open: never raises, never touches the network.
+
+    Returns True when the row was accepted; False on the fail-open drop.
+    """
     try:
         # Redact before the row hits disk: digest and ship read the queue verbatim, so this
         # is the single scrub point. A redaction failure falls into the blanket except below
@@ -94,6 +97,8 @@ def enqueue(root: str, event: str, payload: dict | None) -> None:
             )
     except Exception:  # noqa: BLE001 - a capture failure must never block or break a turn
         LOG.debug("capture enqueue failed for %s", root, exc_info=True)
+        return False
+    return True
 
 
 def pending_count(root: str) -> int:

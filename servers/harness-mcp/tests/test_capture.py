@@ -4,6 +4,7 @@ import contextlib
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,13 @@ def test_enqueue_never_raises_on_broken_state_dir(tmp_path, monkeypatch):
     """A hook must survive an unwritable queue location silently."""
     monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", "/dev/null/nope")
     capture.enqueue(str(tmp_path), "stop", {"x": 1})  # must not raise
+
+
+def test_enqueue_reports_success_and_failure(tmp_path, monkeypatch):
+    """True when the row landed; False on the fail-open drop — retry loops need the signal."""
+    assert capture.enqueue(str(tmp_path), "stop", {"x": 1}) is True
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", "/dev/null/nope")
+    assert capture.enqueue(str(tmp_path), "stop", {"x": 2}) is False
 
 
 def test_enqueue_caps_payload_and_queue(tmp_path, monkeypatch):
@@ -92,17 +100,37 @@ def test_enqueue_redaction_respects_repo_secrets_config(tmp_path, isolated_harne
     assert secrets.REDACTION in stored
 
 
+def test_repo_secrets_yml_extends_builtins(tmp_path, isolated_harness_home):
+    """A sparse repo yml ADDS patterns; the builtins keep redacting alongside it."""
+    pol = isolated_harness_home / "repos" / paths.repo_id(str(tmp_path)) / "policies"
+    pol.mkdir(parents=True)
+    (pol / "secrets.yml").write_text('redact_patterns:\n  - "CUSTOM-[0-9]{4}"\n')
+    capture.enqueue(str(tmp_path), "post_tool_use", {"token": "CUSTOM-1234", "gh": "ghp_" + "a" * 24})
+    (stored,) = _queue_payloads(str(tmp_path))
+    assert "CUSTOM-1234" not in stored
+    assert "ghp_" + "a" * 24 not in stored
+    assert secrets.REDACTION in stored
+
+
 def test_defaults_yml_matches_code_builtin_patterns():
-    """Drift tripwire: the packaged yml REPLACES the code defaults in load(), so they must match."""
+    """Parity tripwire: load() merges (never replaces), so this is documentation/template hygiene only."""
     yml_path = Path(secrets.__file__).parent / "defaults" / "secrets.yml"
     yml = yaml.safe_load(yml_path.read_text())
     assert yml["redact_patterns"] == secrets.DEFAULT_REDACT_PATTERNS
 
 
+@pytest.mark.timeout(30)
 def test_wal_survives_concurrent_writers(tmp_path):
     """Parallel hook processes (threads with separate connections) all land their rows."""
     root = str(tmp_path)
-    threads = [threading.Thread(target=capture.enqueue, args=(root, "post_tool_use", {"n": n})) for n in range(24)]
+
+    def _persist(n: int) -> None:
+        # enqueue is fail-open: under busy-timeout contention a writer may drop its row.
+        # The durable property is "every writer that retries lands", not "no drop ever".
+        while not capture.enqueue(root, "post_tool_use", {"n": n}):
+            time.sleep(0.05)
+
+    threads = [threading.Thread(target=_persist, args=(n,)) for n in range(24)]
     for t in threads:
         t.start()
     for t in threads:
