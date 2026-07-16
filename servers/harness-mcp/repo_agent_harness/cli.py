@@ -14,6 +14,7 @@ from pathlib import Path
 
 from repo_agent_harness import (
     agent_hooks,
+    claude_mem_migrate,
     context,
     deploy,
     drift,
@@ -41,20 +42,14 @@ def _root() -> str:
 def _hook(event: str) -> int:
     """Run a Claude Code hook handler: event JSON on stdin, decision JSON on stdout.
 
-    Fail-open by contract: any error (bad JSON, missing repo, policy bug) prints an
-    empty response and exits 0, so a hook problem never blocks legitimate work.
+    Routing (and heartbeat stamping) lives in ``agent_hooks.dispatch``, shared with the
+    lightweight ``python -m`` entry. Fail-open by contract: any error (bad JSON, missing
+    repo, policy bug) prints an empty response and exits 0, so a hook problem never
+    blocks legitimate work.
     """
-    handlers = {
-        "pre-tool-use": agent_hooks.pre_tool_use,
-        "post-tool-use": agent_hooks.post_tool_use,
-        "user-prompt-submit": agent_hooks.user_prompt_submit,
-        "session-start": agent_hooks.session_start,
-        "stop": agent_hooks.stop,
-        "pre-compact": agent_hooks.pre_compact,
-    }
     try:
         data = json.load(sys.stdin)
-        out = handlers.get(event, agent_hooks.pre_tool_use)(data)
+        out = agent_hooks.dispatch(event, data)
     except Exception:  # noqa: BLE001 — fail-open contract: any hook error must yield an empty allow
         out = {}
     print(json.dumps(out))
@@ -206,6 +201,28 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--dry-run", action="store_true", help="Only report files and cost estimate")
     sp.add_argument("--confirm", action="store_true", help="Accept an over-limit estimated cost")
     sp = sub.add_parser(
+        "migrate-claude-mem",
+        parents=[common],
+        help="One-shot, resumable import of the frozen claude-mem store into cognee (dry-run unless --confirm)",
+    )
+    sp.add_argument("--db", default=None, help="Path to claude-mem.db (default ~/.claude-mem/claude-mem.db)")
+    sp.add_argument("--dataset", required=True, help="Target cognee dataset name")
+    sp.add_argument("--node-set", action="append", default=None, help="Extra node_set tag (repeatable)")
+    sp.add_argument("--project", action="append", default=None, help="Only this claude-mem project (repeatable)")
+    sp.add_argument("--types", action="append", default=None, help="Only this observation type (repeatable)")
+    sp.add_argument("--since", default=None, help="Only rows observed at/after this ISO-8601 date or epoch")
+    sp.add_argument("--until", default=None, help="Only rows observed at/before this ISO-8601 date or epoch")
+    sp.add_argument("--granularity", choices=list(claude_mem_migrate.GRANULARITIES), default="summaries-only")
+    sp.add_argument("--dry-run", action="store_true", help="Only report the plan (the default unless --confirm)")
+    sp.add_argument("--confirm", action="store_true", help="Actually ship; without it the run stays a dry-run")
+    sp = sub.add_parser(
+        "memify",
+        parents=[common],
+        help="Manually trigger the background memify pass for a dataset (stamps the memify heartbeat)",
+    )
+    sp.add_argument("--dataset", required=True, help="Target cognee dataset name")
+    sp.add_argument("--node-name", default=None, help="Optional node-set label, echoed in the output for audit")
+    sp = sub.add_parser(
         "prompt",
         parents=[common],
         help="Inspect the per-repo workflow prompts SSOT (works without a git repo)",
@@ -275,6 +292,26 @@ def main(argv: list[str] | None = None) -> int:
         "migrate-serena-memories": lambda: asyncio.run(
             mem.migrate_serena_memories(root, args.dataset, dry_run=args.dry_run, confirm=args.confirm)
         ).model_dump(exclude_none=True),
+        # dry-run wins over confirm on purpose: passing both flags stays a report, never a write
+        "migrate-claude-mem": lambda: asyncio.run(
+            claude_mem_migrate.migrate(
+                args.db,
+                args.dataset,
+                node_set=args.node_set,
+                projects=args.project,
+                types=args.types,
+                since=args.since,
+                until=args.until,
+                granularity=args.granularity,
+                dry_run=args.dry_run or not args.confirm,
+                confirm=args.confirm,
+            )
+        ).model_dump(exclude_none=True),
+        "memify": lambda: {
+            "ok": asyncio.run(mem.run_memify(root, args.dataset)),
+            "dataset": args.dataset,
+            "node_name": args.node_name,
+        },
         "serena-daemon": lambda: (
             serena_daemon.stop_daemon(root)
             if args.action == "stop"
