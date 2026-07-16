@@ -64,6 +64,16 @@ async def test_rules_is_a_coding_rules_search():
     assert out.search_type == "CODING_RULES"
     payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
     assert payload["searchType"] == "CODING_RULES"
+    # No dataset argument -> no datasets key: the user's span-all default scope.
+    assert "datasets" not in payload
+
+
+async def test_rules_scopes_to_dataset_when_given():
+    fake = FakeCognee(datasets=["kolbe"])
+    out = await mem.rules("q", dataset="kolbe", client=_wired(fake))
+    assert isinstance(out, MemSearchResult)
+    payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
+    assert payload["datasets"] == ["kolbe"]
 
 
 async def test_search_maps_client_failure_to_mem_error():
@@ -390,6 +400,29 @@ async def test_doctor_heartbeat_hint_fires_without_cognee_configured(tmp_path):
     paths.hook_heartbeat_file(str(root), "session-start").write_text(json.dumps({"ts": time.time(), "count": 3}))
     out = await mem.doctor(client=_unconfigured(), root=str(root))
     assert any("stop hook heartbeat never/stale" in h for h in out.hints)
+
+
+async def test_doctor_hints_malformed_secrets_yml(tmp_path, isolated_harness_home):
+    """A malformed repo secrets.yml used to drop capture rows silently — doctor must surface it."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    pol = isolated_harness_home / "repos" / paths.repo_id(str(root)) / "policies"
+    pol.mkdir(parents=True)
+    (pol / "secrets.yml").write_text('redact_patterns:\n  - "foo("\n')
+    out = await mem.doctor(client=_unconfigured(), root=str(root))
+    assert any("invalid redact pattern" in h for h in out.hints)
+
+
+async def test_doctor_hints_malformed_secrets_yml_when_configured(tmp_path, isolated_harness_home):
+    """The secrets hint fires on the configured branch too — both doctor paths are wired."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    pol = isolated_harness_home / "repos" / paths.repo_id(str(root)) / "policies"
+    pol.mkdir(parents=True)
+    (pol / "secrets.yml").write_text('redact_patterns:\n  - "foo("\n')
+    fake = FakeCognee(datasets=["agent_sessions"])
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert any("invalid redact pattern" in h for h in out.hints)
 
 
 # ---------------------------------------------------------------- serena migration

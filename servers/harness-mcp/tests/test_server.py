@@ -45,6 +45,10 @@ def test_tools_registered():
         "repo_diff_current",
         "repo_health",
         "repo_policy_check_command",
+        "mem_search",
+        "mem_rules",
+        "mem_remember",
+        "mem_doctor",
     }
     assert expected <= names
 

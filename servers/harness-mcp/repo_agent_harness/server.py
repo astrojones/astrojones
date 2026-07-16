@@ -665,9 +665,10 @@ async def mem_search(inp: models.MemSearchIn) -> dict:
 async def mem_rules(
     query: Annotated[str, Field(description="What rules to retrieve, e.g. 'python error handling'")],
     top_k: Annotated[int, Field(ge=1, le=50)] = 10,
+    dataset: Annotated[str | None, Field(description="Dataset name; None = the user's default span-all scope")] = None,
 ) -> dict:
     """Retrieve distilled coding rules from memory (CODING_RULES search)."""
-    return (await mem.rules(query, top_k)).model_dump(exclude_none=True)
+    return (await mem.rules(query, top_k, dataset)).model_dump(exclude_none=True)
 
 
 @mcp.tool()

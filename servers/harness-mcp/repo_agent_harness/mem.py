@@ -17,7 +17,7 @@ from http import HTTPStatus
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from repo_agent_harness import cognee_client, paths
+from repo_agent_harness import cognee_client, paths, secrets
 from repo_agent_harness.cognee_client import (
     NOT_CONFIGURED_HINT,
     CogneeClient,
@@ -110,9 +110,15 @@ async def search(inp: MemSearchIn, client: CogneeClient | None = None) -> MemSea
     return MemSearchResult(results=results, search_type=inp.search_type, dataset=inp.dataset)
 
 
-async def rules(query: str, top_k: int = 10, client: CogneeClient | None = None) -> MemSearchResult | MemError:
+async def rules(
+    query: str,
+    top_k: int = 10,
+    dataset: str | None = None,
+    client: CogneeClient | None = None,
+) -> MemSearchResult | MemError:
     """Retrieve coding rules distilled into the graph (thin CODING_RULES search)."""
-    return await search(MemSearchIn(query=query, search_type="CODING_RULES", top_k=top_k), client=client)
+    inp = MemSearchIn(query=query, search_type="CODING_RULES", top_k=top_k, dataset=dataset)
+    return await search(inp, client=client)
 
 
 async def remember(
@@ -431,11 +437,19 @@ def _heartbeat_hints(root: str | None) -> list[str]:
     return []
 
 
+def _secrets_hints(root: str | None) -> list[str]:
+    """A malformed repo secrets.yml drops capture rows silently — doctor is where it must surface.
+
+    Fail-open like the other sentinel producers: no root simply skips the check.
+    """
+    return secrets.validate(root) if root else []
+
+
 async def doctor(client: CogneeClient | None = None, root: str | None = None) -> MemDoctorResult:
     """Checkable health: reachability, auth, competing-capture and heartbeat sentinels.
 
-    ``root`` (optional, wired by the server) enables the per-repo stop-heartbeat check;
-    without it doctor reports exactly what it always did.
+    ``root`` (optional, wired by the server) enables the per-repo stop-heartbeat and
+    secrets.yml checks; without it doctor reports exactly what it always did.
     """
     c = _client(client)
     out = MemDoctorResult(configured=c.configured)
@@ -444,6 +458,7 @@ async def doctor(client: CogneeClient | None = None, root: str | None = None) ->
         out.hints.extend(_capture_sentinels())
         # A dead stop hook loses local captures regardless of cognee configuration.
         out.hints.extend(_heartbeat_hints(root))
+        out.hints.extend(_secrets_hints(root))
         return out
     try:
         await c.health()
@@ -459,4 +474,5 @@ async def doctor(client: CogneeClient | None = None, root: str | None = None) ->
             out.hints.append(f"authenticated probe failed: {exc}")
     out.hints.extend(_capture_sentinels())
     out.hints.extend(_heartbeat_hints(root))
+    out.hints.extend(_secrets_hints(root))
     return out
