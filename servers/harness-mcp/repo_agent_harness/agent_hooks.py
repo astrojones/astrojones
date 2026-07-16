@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,26 +66,26 @@ def _serena_gate_blocks(repo: str, path: str) -> tuple[bool, str]:
         return False, ""  # fail open
 
 
-def pre_tool_use(data: dict) -> dict:
+def pre_tool_use(data: dict, root: str | None = None) -> dict:
     """Deny dangerous shell commands, secret-path reads, and ungated code reads via repo policy."""
     tool = data.get("tool_name", "")
     tin = data.get("tool_input") or {}
-    repo = git.repo_root()
-    root = repo or str(Path.cwd())
+    repo = root or git.repo_root()
+    base = repo or str(Path.cwd())
 
     if tool == "Bash":
         cmd = tin.get("command", "")
         if cmd:
-            check = policies.check_command(cmd, root)
+            check = policies.check_command(cmd, base)
             if not check.allowed:
                 return _deny(check.reason)
 
     elif tool in _GUARDED_FILE_TOOLS:
         path = tin.get("file_path") or tin.get("path") or tin.get("notebook_path") or ""
         if path:
-            cfg = secrets.load(root)
+            cfg = secrets.load(base)
             try:
-                rel = str(Path(path).resolve().relative_to(Path(root).resolve()))
+                rel = str(Path(path).resolve().relative_to(Path(base).resolve()))
             except ValueError:
                 rel = path
             if secrets.is_secret_path(rel, cfg):
@@ -155,7 +157,7 @@ def _perception_deltas(current: dict, last: dict | None) -> list[str]:
     return lines
 
 
-def post_tool_use(data: dict) -> dict:
+def post_tool_use(data: dict, root: str | None = None) -> dict:
     """After an edit/write: record the touched path and surface any current check regression.
 
     When the perception daemon has a snapshot, this stays quiet on green (the harness is already
@@ -164,7 +166,7 @@ def post_tool_use(data: dict) -> dict:
     """
     if data.get("tool_name", "") not in _EDIT_TOOLS:
         return {}
-    repo = git.repo_root()
+    repo = root or git.repo_root()
     tin = data.get("tool_input") or {}
     path = tin.get("file_path") or tin.get("path") or tin.get("notebook_path") or ""
     if repo and path:
@@ -182,7 +184,7 @@ def post_tool_use(data: dict) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note[:9000]}}
 
 
-def user_prompt_submit(data: dict) -> dict:
+def user_prompt_submit(data: dict, root: str | None = None) -> dict:
     """Once per turn, inject a digest of perception changes since the last turn (deltas only).
 
     Reads the daemon's snapshot and the last-seen marker, emits only what changed (a check went
@@ -190,7 +192,7 @@ def user_prompt_submit(data: dict) -> dict:
     standing failure is reported once, not re-nagged. Silent when nothing changed or no snapshot.
     """
     _ = data
-    repo = git.repo_root()
+    repo = root or git.repo_root()
     if not repo:
         return {}
     current = _read_json(paths.perception_file(repo))
@@ -223,17 +225,17 @@ def _capture(repo: str, event: str, payload: dict) -> None:
         capture.enqueue(repo, event, payload)
 
 
-def stop(data: dict) -> dict:
+def stop(data: dict, root: str | None = None) -> dict:
     """Stop hook: enqueue-only (zero synchronous HTTP); the server-side drain ships it later."""
-    repo = git.repo_root()
+    repo = root or git.repo_root()
     if repo:
         _capture(repo, "stop", data)
     return {}
 
 
-def pre_compact(data: dict) -> dict:
+def pre_compact(data: dict, root: str | None = None) -> dict:
     """PreCompact hook: enqueue-only (zero synchronous HTTP) — capture before context is squashed."""
-    repo = git.repo_root()
+    repo = root or git.repo_root()
     if repo:
         _capture(repo, "pre_compact", data)
     return {}
@@ -261,14 +263,33 @@ _SYMBOLS_MAX_FILES = 40
 _SYMBOLS_MAX_CHARS = 3500
 
 
+# C0/C1 controls minus tab/newline (legit whitespace, collapsed by the callers); \r is
+# stripped too — carriage returns enable terminal-overwrite tricks in injected context.
+_CONTROL_CHARS_RX = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _sanitize_line(text: str) -> str:
+    """Neutralize recall text before it enters the injected session context.
+
+    Graph content is externally influenced (captured tool output, ingested docs), so a
+    poisoned line could carry ``<system-reminder>``/hook-style tag sequences that the model
+    would treat as trusted framing. ``<`` becomes U+2039 (single left angle quote): unlike
+    ``&lt;`` it stays readable as plain text (recall is not HTML), while making it
+    impossible to form a tag. Control characters (ANSI escapes, NUL, C1) are stripped so
+    graph content cannot drive the terminal; tab/newline survive as ordinary whitespace.
+    """
+    return _CONTROL_CHARS_RX.sub("", text.replace("<", chr(0x2039)))
+
+
 def _recall_lines(results: object) -> list[str]:
     """Flatten a mem_search result payload into displayable lines (shape-tolerant).
 
     Handles the live shapes: a list of per-dataset dicts whose ``search_result`` holds
-    either strings (completion answers) or chunk records with a ``text`` field.
+    either strings (completion answers) or chunk records with a ``text`` field. Every
+    line passes through :func:`_sanitize_line` — graph content is untrusted input.
     """
     if isinstance(results, str):
-        return [results.strip()] if results.strip() else []
+        return [_sanitize_line(results.strip())] if results.strip() else []
     raw: list[object] = []
     if isinstance(results, list):
         for r in results:
@@ -280,7 +301,7 @@ def _recall_lines(results: object) -> list[str]:
     lines: list[str] = []
     for item in raw:
         text = item.get("text") if isinstance(item, dict) else item
-        line = " ".join(str(text).split()) if text else ""
+        line = _sanitize_line(" ".join(str(text).split())) if text else ""
         if line:
             lines.append(line[:_RECALL_LINE_CHARS])
     return lines[:_RECALL_MAX_LINES]
@@ -354,16 +375,25 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     return f"Durable-memory recall for {name} (cognee):\n- " + "\n- ".join(lines)
 
 
-def session_start(data: dict, client: CogneeClient | None = None) -> dict:
-    """Inject session-start ``additionalContext`` from three independent, fail-open sections.
+# Hook-degradation warning (session_start section [0b]). Warn only for the events whose
+# silent death actually degrades a session; pre-compact fires too rarely to judge and
+# session-start is the one running right now. Thresholds are hardcoded by design — this is
+# a tripwire, not a tunable.
+_HEARTBEAT_WARN_EVENTS = ("pre-tool-use", "post-tool-use", "user-prompt-submit", "stop")
+_HEARTBEAT_MIN_SESSIONS = 3  # fresh install: too little history to tell "dead" from "new"
+_HEARTBEAT_STALE_S = 7 * 24 * 3600
 
-    In order: an onboarding nudge (if the repo isn't yet in durable memory), a shallow repo
-    symbol map, and a bounded durable-memory recall. Each section is computed independently
-    and fails open to nothing, so a memory problem never delays or breaks session startup.
-    Returns ``{}`` only when all three sections are empty.
+
+def session_start(data: dict, client: CogneeClient | None = None, root: str | None = None) -> dict:
+    """Inject session-start ``additionalContext`` from independent, fail-open sections.
+
+    In order: an onboarding nudge (if the repo isn't yet in durable memory), a hook-heartbeat
+    degradation warning, a shallow repo symbol map, and a bounded durable-memory recall. Each
+    section is computed independently and fails open to nothing, so a memory problem never
+    delays or breaks session startup. Returns ``{}`` only when every section is empty.
     """
     _ = data
-    repo = git.repo_root()
+    repo = root or git.repo_root()
     if not repo:
         return {}
     name = Path(repo).name
@@ -374,6 +404,27 @@ def session_start(data: dict, client: CogneeClient | None = None) -> dict:
     with suppress(Exception):
         if not paths.is_cognee_onboarded(repo):
             sections.append("This repo isn't yet onboarded into durable memory — run /astrojones:onboard")
+
+    # [0b] Hook-degradation warning — the shims fail open by contract, so a silently dead
+    # hook (broken shim, stale venv) leaves no error anywhere; comparing heartbeats at
+    # session start is the one moment the agent can be told. Skipped on fresh installs
+    # (fewer than _HEARTBEAT_MIN_SESSIONS recorded session starts: no history to judge).
+    with suppress(Exception):
+        beats = paths.read_hook_heartbeats(repo)
+        ss_beat = beats.get("session-start")
+        if ss_beat and ss_beat["count"] >= _HEARTBEAT_MIN_SESSIONS:
+            now = time.time()
+            stale = [
+                ev
+                for ev in _HEARTBEAT_WARN_EVENTS
+                if ev not in beats or (beats[ev]["ts"] < ss_beat["ts"] and now - beats[ev]["ts"] > _HEARTBEAT_STALE_S)
+            ]
+            if stale:
+                sections.append(
+                    "Hook heartbeat warning: no recent successful run recorded for "
+                    + ", ".join(stale)
+                    + " — the fail-open hook shims may be silently broken; check the plugin hook wiring."
+                )
 
     # [1] Repo symbol map — local, fail-open to nothing.
     with suppress(Exception):
@@ -398,27 +449,51 @@ def session_start(data: dict, client: CogneeClient | None = None) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}
 
 
+_HANDLERS = {
+    "pre-tool-use": pre_tool_use,
+    "post-tool-use": post_tool_use,
+    "user-prompt-submit": user_prompt_submit,
+    "session-start": session_start,
+    "stop": stop,
+    "pre-compact": pre_compact,
+}
+
+
+def dispatch(event: str, data: dict) -> dict:
+    """Route one hook event: resolve the repo root once, run the handler, stamp the heartbeat.
+
+    The stamp records "this handler ran to completion" (the fail-open shims leave no other
+    trace of success); it is written only after the handler returns and under suppress, so
+    a heartbeat problem can never alter the decision JSON. Unknown events keep the historic
+    default (pre-tool-use) and stamp under that resolved name so free-form typos don't
+    pollute the heartbeat list. Handler exceptions propagate — the stdin/stdout wrappers
+    (``main`` below, ``cli._hook``) own the fail-open contract.
+    """
+    root: str | None = None
+    with suppress(Exception):  # repo_root returns None outside a repo; suppress is belt-and-braces
+        root = git.repo_root()
+    resolved = event if event in _HANDLERS else "pre-tool-use"
+    out = _HANDLERS[resolved](data, root=root)
+    if root:
+        with suppress(Exception):  # a stamp failure must never alter the decision JSON
+            paths.stamp_hook_heartbeat(root, resolved)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     """Lightweight hook entry: ``python -m repo_agent_harness.agent_hooks <event>``.
 
     The plugin's PreToolUse shim calls this instead of ``repo-agent-harness hook`` so it imports
     only this module (and git/policies/secrets/serena_gate), not the full CLI graph (gateway,
     health, verify, …) — ~40ms vs ~600ms per tool call. Reads the event JSON on stdin, prints the
-    decision JSON. Fail-open by contract: any error prints an empty response and exits 0.
+    decision JSON, routing through ``dispatch`` (shared with ``cli._hook``) so both entries stamp
+    heartbeats. Fail-open by contract: any error prints an empty response and exits 0.
     """
     args = sys.argv[1:] if argv is None else argv
     event = args[0] if args else "pre-tool-use"
-    handlers = {
-        "pre-tool-use": pre_tool_use,
-        "post-tool-use": post_tool_use,
-        "user-prompt-submit": user_prompt_submit,
-        "session-start": session_start,
-        "stop": stop,
-        "pre-compact": pre_compact,
-    }
     try:
         data = json.load(sys.stdin)
-        out = handlers.get(event, pre_tool_use)(data)
+        out = dispatch(event, data)
     except Exception:  # noqa: BLE001 — fail-open contract: any error must yield an empty allow
         out = {}
     print(json.dumps(out))

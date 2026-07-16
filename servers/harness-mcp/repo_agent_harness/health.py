@@ -13,7 +13,9 @@ staleness probe over ``git status --porcelain`` so cached reads stay honest.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,16 +24,18 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-try:
-    import yaml
-except ImportError:  # keep the package importable in minimal (hook) environments
-    yaml = None
+from repo_agent_harness import git, paths, policies, shell, verify
+from repo_agent_harness.models import (
+    CheckResult,
+    HealthCheckConfig,
+    HealthConfig,
+    HealthSnapshot,
+    HookHeartbeat,
+    InFlightCall,
+)
 
-
-import threading
-
-from repo_agent_harness import git, policies, shell, verify
-from repo_agent_harness.models import CheckResult, HealthCheckConfig, HealthConfig, HealthSnapshot, InFlightCall
+# Optional dependency: keep the package importable in minimal (hook) environments.
+yaml = importlib.import_module("yaml") if importlib.util.find_spec("yaml") else None
 
 CACHE_TTL_SECONDS = 300
 _MAX_OUTPUT = 4000
@@ -319,12 +323,43 @@ def _in_flight(gateway: DiagnosticsGateway | None) -> list[InFlightCall]:
     Duck-typed on ``in_flight_snapshot`` (mirrors the ``call_from_thread`` guard in
     _diagnostics_check); degrades to an empty list without a gateway or on any failure.
     """
-    if gateway is None or not hasattr(gateway, "in_flight_snapshot"):
+    snapshot_fn = getattr(gateway, "in_flight_snapshot", None)
+    if snapshot_fn is None:
         return []
     try:
-        return [InFlightCall(**entry) for entry in gateway.in_flight_snapshot()]
+        return [InFlightCall(**entry) for entry in snapshot_fn()]
     except Exception:  # noqa: BLE001 - the registry must never crash a health snapshot
         return []
+
+
+def _hook_heartbeats(root: str) -> list[HookHeartbeat]:
+    """Surface per-event hook/job heartbeats so a silently dead hook shim is visible.
+
+    Every wired event appears explicitly — ``last_success_at=None`` is the "never ran"
+    signal the fail-open shims cannot give any other way. Extra stamps (async jobs like
+    memify) ride along, sorted by event name. Purely informational: never affects
+    ``snapshot.ok`` and degrades to the never-list on any read failure.
+    """
+    try:
+        beats = paths.read_hook_heartbeats(root)
+    except Exception:  # noqa: BLE001 - heartbeat trouble must never crash a health snapshot
+        beats = {}
+    now = time.time()
+    entries: list[HookHeartbeat] = []
+    for event in sorted(set(paths.HOOK_EVENTS) | set(beats)):
+        beat = beats.get(event)
+        if beat is None:
+            entries.append(HookHeartbeat(event=event))
+            continue
+        entries.append(
+            HookHeartbeat(
+                event=event,
+                last_success_at=datetime.fromtimestamp(beat["ts"], UTC).isoformat(timespec="seconds"),
+                age_s=round(max(0.0, now - beat["ts"]), 3),
+                count=beat["count"],
+            )
+        )
+    return entries
 
 
 def _compute_snapshot(
@@ -349,6 +384,7 @@ def _compute_snapshot(
         provenance="fresh",
         config_error=cfg.config_error,
         in_flight=_in_flight(gateway),
+        hook_heartbeats=_hook_heartbeats(root),
     )
     if only is None:
         _CACHE[root] = _CacheEntry(snapshot=snapshot, status_hash=status_hash, monotonic=time.monotonic())

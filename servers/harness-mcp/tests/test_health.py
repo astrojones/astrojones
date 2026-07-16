@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from repo_agent_harness import health, shell
+from repo_agent_harness import health, paths, shell
 from repo_agent_harness.models import CheckResult
 from repo_agent_harness.paths import repo_id
 
@@ -148,13 +148,18 @@ def test_diagnostics_skips_without_gateway(repo, isolated_harness_home):
 
 
 class _FakeInFlightGateway:
-    """Stand-in gateway exposing only the in_flight_snapshot surface (issue #26)."""
+    """Stand-in gateway exposing the in_flight_snapshot surface (issue #26)."""
 
     def __init__(self, entries):
         self._entries = entries
 
     def in_flight_snapshot(self):
         return list(self._entries)
+
+    def call_from_thread(self, name: str, arguments: dict) -> object:
+        """Satisfies DiagnosticsGateway; the cheap test config never runs diagnostics."""
+        msg = "diagnostics not exercised by this fake"
+        raise NotImplementedError(msg)
 
 
 def test_in_flight_surfaces_stalled_call(repo, isolated_harness_home):
@@ -178,6 +183,34 @@ def test_in_flight_empty_without_gateway(repo, isolated_harness_home):
     _write_config(repo, CHEAP_CONFIG, isolated_harness_home)
     snap = health.run(str(repo))
     assert snap.in_flight == []
+
+
+# ------------------------------------------------------------------- hook heartbeats
+
+
+def test_health_lists_all_hook_events_with_never_explicit(repo, isolated_harness_home):
+    _write_config(repo, CHEAP_CONFIG, isolated_harness_home)
+    snap = health.run(str(repo))
+    beats = {b.event: b for b in snap.hook_heartbeats}
+    assert set(beats) == set(paths.HOOK_EVENTS)
+    assert all(b.last_success_at is None and b.age_s is None and b.count == 0 for b in beats.values())
+    assert snap.ok is True  # heartbeats are informational — they must never flip ok
+
+
+def test_health_hook_heartbeat_reflects_stamp_and_job(repo, isolated_harness_home):
+    paths.stamp_hook_heartbeat(str(repo), "stop")
+    paths.stamp_hook_heartbeat(str(repo), "memify")  # async jobs ride along in the same list
+    _write_config(repo, CHEAP_CONFIG, isolated_harness_home)
+    snap = health.run(str(repo))
+    beats = {b.event: b for b in snap.hook_heartbeats}
+    assert set(paths.HOOK_EVENTS) <= set(beats)
+    assert beats["stop"].last_success_at is not None
+    assert beats["stop"].age_s is not None
+    assert beats["stop"].age_s >= 0
+    assert beats["stop"].count >= 1
+    assert beats["memify"].last_success_at is not None
+    assert beats["pre-tool-use"].last_success_at is None  # never ran stays explicit
+    assert snap.ok is True
 
 
 def test_verify_kinds_map_to_check_results(repo, isolated_harness_home):
