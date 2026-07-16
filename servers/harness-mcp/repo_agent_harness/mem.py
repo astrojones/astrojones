@@ -12,11 +12,12 @@ import hashlib
 import math
 import os
 import time
+from contextlib import suppress
 from http import HTTPStatus
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from repo_agent_harness import cognee_client
+from repo_agent_harness import cognee_client, paths
 from repo_agent_harness.cognee_client import (
     NOT_CONFIGURED_HINT,
     CogneeClient,
@@ -42,6 +43,31 @@ from repo_agent_harness.models import (
 )
 
 DEFAULT_DATASET = "agent_sessions"
+
+# Naming conventions table — the SSOT for every write path. capture, migrate, and
+# onboarding all write against these names; no writer picks a dataset or node_set tag
+# ad hoc (colon tags like "type:decision" persist server-side via belongs_to_set).
+NODE_SET_PROJECT_DOCS = "project_docs"
+NODE_SET_SESSION_DIGEST = "session_digest"
+NODE_SET_CLAUDE_MEM_IMPORT = "claude_mem_import"
+NODE_SET_CODE_MAP = "code_map"
+TYPE_TAG_PREFIX = "type:"
+CONCEPT_TAG_PREFIX = "concept:"
+PROJECT_TAG_PREFIX = "project:"
+
+
+def resolve_dataset(root: str | None) -> str:
+    """The dataset a write should target — part of the conventions table above.
+
+    A repo marked by onboarding resolves to its recorded dataset; no root or an
+    unmarked repo falls back to DEFAULT_DATASET, the shared cross-repo scope.
+    """
+    if root:
+        onboarded = paths.onboarded_dataset(root)
+        if onboarded:
+            return onboarded
+    return DEFAULT_DATASET
+
 
 # Cost pre-flight for bulk ingest: chars/4 ~ tokens; each chunk re-passes through the
 # extraction LLM, so price ~ tokens * usd-per-Mtok. Both knobs are env-tunable; the limit
@@ -89,20 +115,30 @@ async def rules(query: str, top_k: int = 10, client: CogneeClient | None = None)
     return await search(MemSearchIn(query=query, search_type="CODING_RULES", top_k=top_k), client=client)
 
 
-async def remember(inp: MemRememberIn, client: CogneeClient | None = None) -> MemRememberResult | MemError:
-    """Store one fact: fast ``/add``, then background ``/cognify`` — never blocks on extraction."""
+async def remember(
+    inp: MemRememberIn,
+    client: CogneeClient | None = None,
+    *,
+    root: str | None = None,
+) -> MemRememberResult | MemError:
+    """Store one fact: fast ``/add``, then background ``/cognify`` — never blocks on extraction.
+
+    ``inp.dataset=None`` resolves through the conventions table (resolve_dataset), so an
+    onboarded repo's facts land in its own dataset when the caller passes ``root``.
+    """
+    dataset = inp.dataset or resolve_dataset(root)
     text = inp.text
     if inp.metadata:
         pairs = ", ".join(f"{k}={v}" for k, v in inp.metadata.items())
         text = f"{text}\n\n[metadata: {pairs}]"
     c = _client(client)
     try:
-        added = await c.add([text], inp.dataset, inp.node_set, run_in_background=False)
-        await c.cognify(inp.dataset, run_in_background=True)
+        added = await c.add([text], dataset, inp.node_set, run_in_background=False)
+        await c.cognify(dataset, run_in_background=True)
     except CogneeError as exc:
         return _error(exc)
     add_id = added.get("id") if isinstance(added, dict) else None
-    return MemRememberResult(dataset=inp.dataset, add_id=str(add_id) if add_id else None)
+    return MemRememberResult(dataset=dataset, add_id=str(add_id) if add_id else None)
 
 
 def _estimate(items: list[str]) -> MemIngestEstimate:
@@ -156,7 +192,11 @@ async def _ship(
     node_set: list[str] | None,
     ontology_key: str | None = None,
 ) -> bool:
-    """Add + cognify ``items``; serial-first on a fresh dataset. Returns whether it was fresh."""
+    """Add + cognify ``items``; serial-first on a fresh dataset. Returns whether it was fresh.
+
+    Ends with a best-effort background memify pass (run_memify) — no root flows through
+    here, so the ``memify`` heartbeat stamp is left to callers that know their repo.
+    """
     existing = {d.get("name") for d in await c.datasets()}
     fresh = dataset not in existing
     rest = items
@@ -173,7 +213,25 @@ async def _ship(
     if rest:
         await c.add(rest, dataset, node_set, run_in_background=False)
         await c.cognify(dataset, run_in_background=True, ontology_key=ontology_key)
+    await run_memify(None, dataset, client=c)
     return fresh
+
+
+async def run_memify(root: str | None, dataset: str, client: CogneeClient | None = None) -> bool:
+    """Post-ingest derived-memory pass: background ``/memify`` + a ``memify`` heartbeat stamp.
+
+    Fail-open like the capture pipeline: a memify failure never fails the write that
+    triggered it (the data already shipped), it just reports False. The stamp lands only
+    on success and only when a root is known — a stamp means "ran to completion".
+    """
+    try:
+        await _client(client).memify(dataset, run_in_background=True)
+    except CogneeError:
+        return False
+    if root:
+        with suppress(OSError):
+            paths.stamp_hook_heartbeat(root, "memify")
+    return True
 
 
 async def stats(inp: MemStatsIn, client: CogneeClient | None = None) -> MemStatsResult | MemError:
@@ -347,13 +405,45 @@ def _capture_sentinels() -> list[str]:
     return hints
 
 
-async def doctor(client: CogneeClient | None = None) -> MemDoctorResult:
-    """Checkable health: reachability, auth, and competing-capture sentinels."""
+# Mirrors agent_hooks' session-start degradation window: "older than the last session-start"
+# alone would fire on turn 1 of every session (stop legitimately stamps before session-start).
+_HEARTBEAT_STALE_S = 7 * 86_400
+
+
+def _heartbeat_hints(root: str | None) -> list[str]:
+    """The stop-hook staleness hint: session captures drain on Stop, so a dead Stop hook loses them.
+
+    Exactly one hint, and only when the hooks are demonstrably wired (session-start has
+    stamped) yet stop never stamped — or last stamped before the latest session-start AND
+    longer than the staleness window ago (recency vetoes the first-turn false positive).
+    Fail-open: no root or unreadable heartbeats simply skip the check.
+    """
+    if not root:
+        return []
+    beats = paths.read_hook_heartbeats(root)
+    start = beats.get("session-start")
+    if not start or start.get("count", 0) <= 0:
+        return []
+    stop = beats.get("stop")
+    stale = stop is not None and stop["ts"] < start["ts"] and time.time() - stop["ts"] > _HEARTBEAT_STALE_S
+    if stop is None or stale:
+        return ["stop hook heartbeat never/stale — session captures may not be enqueued"]
+    return []
+
+
+async def doctor(client: CogneeClient | None = None, root: str | None = None) -> MemDoctorResult:
+    """Checkable health: reachability, auth, competing-capture and heartbeat sentinels.
+
+    ``root`` (optional, wired by the server) enables the per-repo stop-heartbeat check;
+    without it doctor reports exactly what it always did.
+    """
     c = _client(client)
     out = MemDoctorResult(configured=c.configured)
     if not c.configured:
         out.hints.append(NOT_CONFIGURED_HINT)
         out.hints.extend(_capture_sentinels())
+        # A dead stop hook loses local captures regardless of cognee configuration.
+        out.hints.extend(_heartbeat_hints(root))
         return out
     try:
         await c.health()
@@ -368,4 +458,5 @@ async def doctor(client: CogneeClient | None = None) -> MemDoctorResult:
         except CogneeError as exc:
             out.hints.append(f"authenticated probe failed: {exc}")
     out.hints.extend(_capture_sentinels())
+    out.hints.extend(_heartbeat_hints(root))
     return out

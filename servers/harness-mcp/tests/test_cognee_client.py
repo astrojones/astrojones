@@ -140,3 +140,87 @@ def test_env_resolution(monkeypatch):
     monkeypatch.setenv("COGNEE_USERNAME", "d@e.f")
     monkeypatch.setenv("COGNEE_PASSWORD", "pw2")
     assert cognee_client.credentials() == ("d@e.f", "pw2")
+
+
+# ------------------------------------------------------------------ tier-1 wrappers
+
+
+async def test_memify_posts_camelcase_payload():
+    """The memify payload is camelCase; nodeName (per MemifyPayloadDTO) appears only when given."""
+    fake = FakeCognee(datasets=["kolbe"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.memify("kolbe", run_in_background=False)
+    method, _, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/memify")
+    assert method == "POST"
+    assert payload == {"datasetName": "kolbe", "runInBackground": False}
+    await client.memify("kolbe", node_name=["memories"])
+    payload = [pl for _, p, pl in fake.requests if p == "/api/v1/memify"][-1]
+    assert payload == {"datasetName": "kolbe", "runInBackground": True, "nodeName": ["memories"]}
+    await client.aclose()
+
+
+async def test_update_data_patches_multipart_like_add():
+    """PATCH /api/v1/update speaks the same multipart dialect as /add."""
+    fake = FakeCognee(datasets=["kolbe"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.update_data(["revised text"], node_set=["project_docs"])
+    method, _, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/update")
+    assert method == "PATCH"
+    assert payload["data"] == "revised text"
+    assert payload["node_set"] == "project_docs"
+    await client.aclose()
+
+
+async def test_dataset_data_is_an_idempotent_read():
+    """Listing a dataset's data items is an idempotent read (it survives a transport blip)."""
+    fake = FakeCognee(datasets=["kolbe"])
+    fake.data_items["id-kolbe"] = [{"id": "d-1", "name": "item"}]
+    client = CogneeClient(**fake.client_kwargs())
+    await client.datasets()  # login + warm so the failure below is pure transport
+    fake.transport_failures = 1
+    assert await client.dataset_data("id-kolbe") == [{"id": "d-1", "name": "item"}]
+    method, path, _ = next((m, p, pl) for m, p, pl in fake.requests if p.endswith("/data"))
+    assert (method, path) == ("GET", "/api/v1/datasets/id-kolbe/data")
+    await client.aclose()
+
+
+async def test_delete_data_is_a_single_attempt_write():
+    """DELETE of one data item hits the nested route and is never blind-retried."""
+    fake = FakeCognee(datasets=["kolbe"])
+    fake.data_items["id-kolbe"] = [{"id": "d-1"}, {"id": "d-2"}]
+    client = CogneeClient(**fake.client_kwargs())
+    await client.delete_data("id-kolbe", "d-1")
+    method, path, _ = next((m, p, pl) for m, p, pl in fake.requests if "/data/" in p)
+    assert (method, path) == ("DELETE", "/api/v1/datasets/id-kolbe/data/d-1")
+    assert fake.data_items["id-kolbe"] == [{"id": "d-2"}]
+    fake.transport_failures = 1
+    with pytest.raises(CogneeUnavailableError, match="after 1 attempt"):
+        await client.delete_data("id-kolbe", "d-2")
+    await client.aclose()
+
+
+async def test_improve_posts_camelcase_flags():
+    """The improve payload carries camelCase flags; datasetName appears only when given."""
+    fake = FakeCognee(datasets=["kolbe"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.improve()
+    method, _, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/improve")
+    assert method == "POST"
+    assert payload == {"runInBackground": True, "buildGlobalContextIndex": False}
+    await client.improve("kolbe", build_global_context_index=True, run_in_background=False)
+    payload = [pl for _, p, pl in fake.requests if p == "/api/v1/improve"][-1]
+    assert payload == {"datasetName": "kolbe", "runInBackground": False, "buildGlobalContextIndex": True}
+    await client.aclose()
+
+
+async def test_export_markdown_is_an_idempotent_read():
+    """The activity export returns the markdown (a JSON string) and retries as a read."""
+    fake = FakeCognee(datasets=["kolbe"])
+    fake.exports["id-kolbe"] = "# kolbe activity\n- added"
+    client = CogneeClient(**fake.client_kwargs())
+    await client.datasets()  # login + warm so the failure below is pure transport
+    fake.transport_failures = 1
+    assert await client.export_markdown("id-kolbe") == "# kolbe activity\n- added"
+    method, path, _ = next((m, p, pl) for m, p, pl in fake.requests if p.startswith("/api/v1/activity"))
+    assert (method, path) == ("GET", "/api/v1/activity/export/id-kolbe")
+    await client.aclose()

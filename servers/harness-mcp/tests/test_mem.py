@@ -1,11 +1,12 @@
 """mem_* business logic: contracts, cost pre-flight, serial-first cognify, doctor sentinels."""
 
+import json
 import os
 import time
 
 import pytest
-from repo_agent_harness import mem
-from repo_agent_harness.cognee_client import CogneeClient
+from repo_agent_harness import mem, paths
+from repo_agent_harness.cognee_client import CogneeClient, CogneeError
 from repo_agent_harness.models import (
     MemError,
     MemIngestIn,
@@ -96,6 +97,28 @@ async def test_remember_folds_metadata_into_text():
     await mem.remember(MemRememberIn(text="fact", metadata={"repo": "astrojones"}), client=_wired(fake))
     add_payload = next(p for m, path, p in fake.requests if path == "/api/v1/add")
     assert "repo=astrojones" in add_payload["data"]
+
+
+async def test_remember_resolves_none_dataset_via_conventions(tmp_path):
+    """dataset=None resolves through resolve_dataset: onboarded marker wins, else the default."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths.mark_cognee_onboarded(str(root), dataset="kolbe_docs")
+    fake = FakeCognee(datasets=["kolbe_docs"])
+    out = await mem.remember(MemRememberIn(text="fact", dataset=None), client=_wired(fake), root=str(root))
+    assert not isinstance(out, MemError)
+    assert out.dataset == "kolbe_docs"
+    add_payload = next(p for m, path, p in fake.requests if path == "/api/v1/add")
+    assert add_payload["datasetName"] == "kolbe_docs"
+    # An explicit dataset always wins over the marker.
+    out = await mem.remember(MemRememberIn(text="fact", dataset="explicit"), client=_wired(fake), root=str(root))
+    assert not isinstance(out, MemError)
+    assert out.dataset == "explicit"
+    # No root context -> the shared default scope, exactly the old behavior.
+    fake2 = FakeCognee(datasets=["agent_sessions"])
+    out = await mem.remember(MemRememberIn(text="fact", dataset=None), client=_wired(fake2))
+    assert not isinstance(out, MemError)
+    assert out.dataset == "agent_sessions"
 
 
 # ------------------------------------------------------------------------- ingest
@@ -323,6 +346,52 @@ async def test_doctor_detects_pending_cognee_plugin_captures(tmp_path, monkeypat
     assert any("cognee-memory plugin capture looks LIVE" in h for h in out.hints)
 
 
+async def test_doctor_flags_never_or_stale_stop_heartbeat(tmp_path):
+    """Exactly one hint when session-start ran but stop never/last stamped before it."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    fake = FakeCognee(datasets=["kolbe"])
+    hint = "stop hook heartbeat never/stale"
+
+    def beat(event: str, ts: float) -> None:
+        paths.hook_heartbeat_file(str(root), event).write_text(json.dumps({"ts": ts, "count": 1}))
+
+    # No heartbeats at all: hooks may simply not be installed — not this hint's business.
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert not any(hint in h for h in out.hints)
+    # session-start ran but stop NEVER did -> captures may never be enqueued.
+    beat("session-start", 200.0)
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert sum(hint in h for h in out.hints) == 1
+    # stop is STALE (older than the last session-start) -> the same single hint.
+    beat("stop", 100.0)
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert sum(hint in h for h in out.hints) == 1
+    # Fresh stop (after the last session-start) -> healthy, no hint.
+    beat("stop", 300.0)
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert not any(hint in h for h in out.hints)
+    # No root (today's server wiring) -> the check is silently skipped.
+    out = await mem.doctor(client=_wired(fake))
+    assert not any(hint in h for h in out.hints)
+    # FIRST TURN of a new session: stop stamped seconds before this session-start
+    # (healthy end of the previous session) — recency must veto the staleness hint.
+    now = time.time()
+    beat("stop", now - 60)
+    beat("session-start", now)
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert not any(hint in h for h in out.hints)
+
+
+async def test_doctor_heartbeat_hint_fires_without_cognee_configured(tmp_path):
+    """A dead stop hook loses local captures regardless of cognee config — hint fires unconfigured too."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths.hook_heartbeat_file(str(root), "session-start").write_text(json.dumps({"ts": time.time(), "count": 3}))
+    out = await mem.doctor(client=_unconfigured(), root=str(root))
+    assert any("stop hook heartbeat never/stale" in h for h in out.hints)
+
+
 # ---------------------------------------------------------------- serena migration
 
 
@@ -361,3 +430,75 @@ async def test_migrate_serena_memories_dry_run_and_empty_dir(tmp_path):
     assert out.migrated == 0
     assert out.estimate is not None
     assert fake.requests == []
+
+
+# --------------------------------------------------------------- conventions table
+
+
+def test_conventions_table_values():
+    """The SSOT constants every write path (capture/migrate/onboard) must use verbatim."""
+    assert mem.NODE_SET_PROJECT_DOCS == "project_docs"
+    assert mem.NODE_SET_SESSION_DIGEST == "session_digest"
+    assert mem.NODE_SET_CLAUDE_MEM_IMPORT == "claude_mem_import"
+    assert mem.NODE_SET_CODE_MAP == "code_map"
+    assert mem.TYPE_TAG_PREFIX == "type:"
+    assert mem.CONCEPT_TAG_PREFIX == "concept:"
+    assert mem.PROJECT_TAG_PREFIX == "project:"
+
+
+def test_resolve_dataset_prefers_the_onboarded_marker(tmp_path):
+    """A marked repo resolves to its onboarded dataset; everything else falls back to the default."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert mem.resolve_dataset(None) == "agent_sessions"
+    assert mem.resolve_dataset(str(root)) == "agent_sessions"  # unmarked -> default
+    paths.mark_cognee_onboarded(str(root), dataset="kolbe_docs")
+    assert mem.resolve_dataset(str(root)) == "kolbe_docs"
+
+
+# ------------------------------------------------------------------------- memify
+
+
+async def test_run_memify_stamps_heartbeat_and_fails_open(tmp_path):
+    """A successful memify stamps the ``memify`` heartbeat; failures return False, never raise."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    fake = FakeCognee(datasets=["kolbe"])
+    assert await mem.run_memify(str(root), "kolbe", client=_wired(fake)) is True
+    payload = next(p for m, path, p in fake.requests if path == "/api/v1/memify")
+    assert payload == {"datasetName": "kolbe", "runInBackground": True}
+    assert "memify" in paths.read_hook_heartbeats(str(root))
+    # Fail-open: an unconfigured client reports False and stamps nothing.
+    root2 = tmp_path / "repo2"
+    root2.mkdir()
+    assert await mem.run_memify(str(root2), "kolbe", client=_unconfigured()) is False
+    assert "memify" not in paths.read_hook_heartbeats(str(root2))
+    # No root (callers without repo context): memify still runs, stamping is skipped.
+    fake2 = FakeCognee(datasets=["kolbe"])
+    assert await mem.run_memify(None, "kolbe", client=_wired(fake2)) is True
+
+
+async def test_ingest_runs_memify_after_the_last_cognify():
+    """A completed ship ends with one background memify pass over the same dataset."""
+    fake = FakeCognee(datasets=["docs"])
+    out = await mem.ingest(MemIngestIn(items=["a", "b"], dataset="docs"), client=_wired(fake))
+    assert isinstance(out, MemIngestResult)
+    tail = [path for m, path, p in fake.requests if path in {"/api/v1/cognify", "/api/v1/memify"}]
+    assert tail == ["/api/v1/cognify", "/api/v1/memify"]
+    memify_payload = next(p for m, path, p in fake.requests if path == "/api/v1/memify")
+    assert memify_payload == {"datasetName": "docs", "runInBackground": True}
+
+
+async def test_ingest_survives_memify_failure(monkeypatch):
+    """The memify pass is best-effort: its failure never fails the ingest that triggered it."""
+    fake = FakeCognee(datasets=["docs"])
+    client = _wired(fake)
+
+    async def boom(*args, **kwargs):
+        msg = "memify exploded"
+        raise CogneeError(msg)
+
+    monkeypatch.setattr(client, "memify", boom)
+    out = await mem.ingest(MemIngestIn(items=["a"], dataset="docs"), client=client)
+    assert isinstance(out, MemIngestResult)
+    assert out.ingested == 1

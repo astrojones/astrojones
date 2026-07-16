@@ -673,7 +673,7 @@ async def mem_rules(
 @mcp.tool()
 async def mem_remember(inp: models.MemRememberIn) -> dict:
     """Store one fact durably: fast /add, then background /cognify (never blocks on extraction)."""
-    return (await mem.remember(inp)).model_dump(exclude_none=True)
+    return (await mem.remember(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()
@@ -696,8 +696,8 @@ async def mem_ontology(inp: models.MemOntologyIn) -> dict:
 
 @mcp.tool()
 async def mem_doctor() -> dict:
-    """Cognee memory health: configured/reachable/authenticated + competing-capture sentinels."""
-    return (await mem.doctor()).model_dump(exclude_none=True)
+    """Cognee memory health: configured/reachable/authenticated + capture/heartbeat sentinels."""
+    return (await mem.doctor(root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()

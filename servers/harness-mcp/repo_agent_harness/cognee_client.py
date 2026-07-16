@@ -373,6 +373,68 @@ class CogneeClient:
         files = [("ontology_file", (f"{key}.owl", xml.encode("utf-8"), "application/rdf+xml"))]
         return await self.request("POST", "/api/v1/ontologies", data=fields, files=files)
 
+    async def memify(
+        self,
+        dataset: str,
+        *,
+        node_name: list[str] | None = None,
+        run_in_background: bool = True,
+    ) -> Json:
+        """POST /api/v1/memify — derived-memory pass over one dataset (write, single attempt).
+
+        The live MemifyPayloadDTO takes ``nodeName`` (NOT node_set) to scope the pass;
+        omitted entirely when not given so the server applies its own default tasks.
+        """
+        payload: dict[str, Json] = {"datasetName": dataset, "runInBackground": run_in_background}
+        if node_name:
+            payload["nodeName"] = list(node_name)
+        return await self.request("POST", "/api/v1/memify", json=payload)
+
+    async def update_data(self, items: list[str], node_set: list[str] | None = None) -> Json:
+        """PATCH /api/v1/update (multipart, add-shaped body) — replace stored data in place."""
+        fields: dict[str, str | list[str]] = {}
+        if node_set:
+            fields["node_set"] = list(node_set)  # list value -> repeated multipart field
+        files = [("data", (f"item-{i}.txt", text.encode("utf-8"), "text/plain")) for i, text in enumerate(items)]
+        return await self.request("PATCH", "/api/v1/update", data=fields, files=files)
+
+    async def dataset_data(self, dataset_id: str) -> list[dict]:
+        """GET /api/v1/datasets/{dataset_id}/data — the dataset's data items (idempotent read)."""
+        out = await self.request("GET", f"/api/v1/datasets/{dataset_id}/data", idempotent=True)
+        return out if isinstance(out, list) else []
+
+    async def delete_data(self, dataset_id: str, data_id: str) -> Json:
+        """DELETE /api/v1/datasets/{dataset_id}/data/{data_id} — remove one data item (write)."""
+        return await self.request("DELETE", f"/api/v1/datasets/{dataset_id}/data/{data_id}")
+
+    async def improve(
+        self,
+        dataset: str | None = None,
+        *,
+        build_global_context_index: bool = False,
+        run_in_background: bool = True,
+    ) -> Json:
+        """POST /api/v1/improve — graph self-improvement pass (write, single attempt).
+
+        camelCase fields per the live ImprovePayloadDTO (which extends the memify payload,
+        so the dataset travels as ``datasetName``); omitted entirely when not given.
+        """
+        payload: dict[str, Json] = {
+            "runInBackground": run_in_background,
+            "buildGlobalContextIndex": build_global_context_index,
+        }
+        if dataset:
+            payload["datasetName"] = dataset
+        return await self.request("POST", "/api/v1/improve", json=payload)
+
+    async def export_markdown(self, dataset_id: str) -> Json:
+        """GET /api/v1/activity/export/{dataset_id} — markdown audit/backup export (idempotent).
+
+        The Paket-2 backup path: this deployment has no COGX endpoint, so the activity
+        export is the only server-side dump. The body arrives as a JSON-encoded string.
+        """
+        return await self.request("GET", f"/api/v1/activity/export/{dataset_id}", idempotent=True)
+
 
 # One shared client per process, mirroring the `_serena` gateway singleton in server.py:
 # tools and the (future) capture drain reuse the same token, circuit state, and connection pool.

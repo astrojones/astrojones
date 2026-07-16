@@ -10,6 +10,7 @@ canned/error/hang philosophy: expire tokens, fail transports, return 5xx.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import parse_qs
 
 import httpx
@@ -26,6 +27,8 @@ class FakeCognee:
         """Start with ``datasets`` pre-existing (name -> deterministic fake id)."""
         self.datasets: list[str] = list(datasets or [])
         self.ontologies: set[str] = set()
+        self.data_items: dict[str, list[dict]] = {}  # dataset_id -> data entries (list/delete routes)
+        self.exports: dict[str, str] = {}  # dataset_id -> canned markdown export
         self.requests: list[tuple[str, str, dict]] = []  # (method, path, payload-ish)
         self.logins = 0
         self._token_serial = 0
@@ -85,6 +88,9 @@ class FakeCognee:
         return self._route_authed(request, path)
 
     def _route_authed(self, request: httpx.Request, path: str) -> httpx.Response:  # noqa: PLR0911 - one return per route is the readable shape
+        tier1 = self._route_tier1(request, path)
+        if tier1 is not None:
+            return tier1
         if path == "/api/v1/datasets" and request.method == "GET":
             self._record(request, {})
             body = [{"name": n, "id": f"id-{n}"} for n in self.datasets]
@@ -117,6 +123,30 @@ class FakeCognee:
             self.ontologies.add(str(payload.get("ontology_key")))
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(404, json={"detail": f"unrouted: {request.method} {path}"})
+
+    def _route_tier1(self, request: httpx.Request, path: str) -> httpx.Response | None:  # noqa: PLR0911 - one return per route is the readable shape
+        """Routes for the Tier-1 wrappers (memify/update/improve/data/export); None = not ours."""
+        if path in {"/api/v1/memify", "/api/v1/improve"}:
+            payload = json.loads(request.content)
+            self._record(request, payload)
+            return httpx.Response(200, json={"status": "ok"})
+        if path == "/api/v1/update" and request.method == "PATCH":
+            payload = self._form_payload(request)
+            self._record(request, payload)
+            return httpx.Response(200, json={"ok": True})
+        if (m := re.fullmatch(r"/api/v1/datasets/([^/]+)/data", path)) and request.method == "GET":
+            self._record(request, {})
+            return httpx.Response(200, json=self.data_items.get(m.group(1), []))
+        if (m := re.fullmatch(r"/api/v1/datasets/([^/]+)/data/([^/]+)", path)) and request.method == "DELETE":
+            self._record(request, {})
+            dataset_id, data_id = m.group(1), m.group(2)
+            self.data_items[dataset_id] = [d for d in self.data_items.get(dataset_id, []) if d.get("id") != data_id]
+            return httpx.Response(200, json={"status": "ok"})
+        if m := re.fullmatch(r"/api/v1/activity/export/([^/]+)", path):
+            self._record(request, {})
+            # FastAPI JSON-encodes a str return value, so the markdown arrives as a JSON string.
+            return httpx.Response(200, json=self.exports.get(m.group(1), ""))
+        return None
 
     def _add(self, request: httpx.Request) -> httpx.Response:
         payload = self._form_payload(request)
