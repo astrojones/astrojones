@@ -16,6 +16,12 @@
 #      hook DISPATCH works — deny wins, state files written, additionalContext injected —
 #      asserted machine-readably by docker/e2e_verify.py (never on model prose).
 set -uo pipefail
+# Host-safety: this ENTRYPOINT mutates git state in /workspace/repo; a host run once
+# committed into the checked-out repo. Refuse outside a container.
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && [ "${ASTROJONES_TEST_IN_CONTAINER:-}" != "1" ]; then
+  echo "docker/test.sh runs only inside the container — use docker/run.sh" >&2
+  exit 1
+fi
 PLUGIN=/plugins/astrojones
 HARNESS=$PLUGIN/servers/harness-mcp
 PASS=0; FAIL=0
@@ -31,7 +37,7 @@ node --version; claude --version; uv --version; git --version
 command -v python3 >/dev/null && ok "python3 on PATH (plugin hooks.json contract)" || no "python3 missing — plugin hooks CANNOT fire in this env"
 
 echo; echo "### TEST 1: PreToolUse hook denies a dangerous command (deterministic)"
-mkdir -p /workspace/repo && cd /workspace/repo
+mkdir -p /workspace/repo && cd /workspace/repo || exit 1
 git init -q 2>/dev/null; git config user.email t@t 2>/dev/null; git config user.name t 2>/dev/null
 printf 'def greet(name):\n    return f"hi {name}"\n\nclass App:\n    def run(self):\n        return greet("world")\n' > app.py
 git add -A 2>/dev/null && git commit -qm init 2>/dev/null
@@ -60,14 +66,14 @@ fire_hook() {
     no "$file failed (exit $RC, stderr: $(cat /tmp/he))"
   fi
 }
-cd "$PLUGIN"
+cd "$PLUGIN" || exit 1
 fire_hook session_start.py      '{"hook_event_name":"SessionStart","cwd":"'"$PLUGIN"'","source":"startup"}' 'onboarded into durable memory'
 fire_hook pre_tool_use.py       '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' '^{}$'
 fire_hook post_tool_use.py      '{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"'"$PLUGIN"'/README.md","old_string":"a","new_string":"b"},"tool_response":{"success":true}}' 'repo_verify_changed'
 fire_hook user_prompt_submit.py '{"hook_event_name":"UserPromptSubmit","prompt":"fix the bug in app.py"}' ''
 fire_hook stop.py               '{"hook_event_name":"Stop","stop_hook_active":false}' ''
 fire_hook pre_compact.py        '{"hook_event_name":"PreCompact","trigger":"manual"}' ''
-cd /workspace/repo
+cd /workspace/repo || exit 1
 
 echo; echo "### TEST 2: MCP server boots and registers repo_context_overview"
 if "$PY" "$PLUGIN/docker/mcp_probe.py" "$HARNESS"; then ok "MCP server lists repo_context_overview"; else no "MCP server/probe failed"; fi
@@ -77,7 +83,7 @@ if ( cd "$HARNESS" && uv run pytest -q 2>&1 | tail -8 ); then ok "pytest suite r
 
 echo; echo "### TEST 4 (optional): claude -p end-to-end MCP call (needs CLAUDE_CODE_OAUTH_TOKEN)"
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  cd /workspace/repo
+  cd /workspace/repo || exit 1
   OUT=$(claude -p --plugin-dir "$PLUGIN" --permission-mode bypassPermissions \
         "Call the mcp__plugin_astrojones_repo-agent-harness__repo_context_overview tool with no arguments, then reply with EXACTLY one line: LANGUAGES=<the 'languages' array, comma-joined>." 2>&1) || true
   echo "  claude said: $(echo "$OUT" | tail -3)"

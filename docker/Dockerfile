@@ -75,5 +75,7 @@ RUN ln -sf /plugins/astrojones/servers/harness-mcp/.venv/bin/python /usr/local/b
 USER coder
 WORKDIR /workspace
 ENV CLAUDE_PLUGIN_ROOT=/plugins/astrojones
+# Marks the runtime for docker/test.sh's host-safety guard (belt to the /.dockerenv braces).
+ENV ASTROJONES_TEST_IN_CONTAINER=1
 
 ENTRYPOINT ["/plugins/astrojones/docker/test.sh"]
