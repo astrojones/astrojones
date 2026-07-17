@@ -15,6 +15,7 @@ from pathlib import Path
 from repo_agent_harness import (
     agent_hooks,
     claude_mem_migrate,
+    cognee_local,
     context,
     deploy,
     drift,
@@ -54,6 +55,21 @@ def _hook(event: str) -> int:
         out = {}
     print(json.dumps(out))
     return 0
+
+
+def _cognee_local(action: str, *, confirm: bool) -> dict:
+    """Dispatch a `cognee-local` action to the lifecycle module (host-level, no repo needed)."""
+    if action == "nuke" and not confirm:
+        return {"ok": False, "reason": "nuke destroys the data volume; pass --confirm to proceed"}
+    actions = {
+        "up": cognee_local.up,
+        "status": cognee_local.status,
+        "stop": cognee_local.stop,
+        "down": cognee_local.down,
+        "logs": cognee_local.logs,
+        "nuke": cognee_local.nuke,
+    }
+    return actions[action]()
 
 
 def _deploy_status(limit: int, root: str) -> dict:
@@ -193,6 +209,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     sp.add_argument("action", choices=["status", "stop"])
     sp = sub.add_parser(
+        "cognee-local",
+        parents=[common],
+        help="Manage the optional local cognee container (fallback when no remote is configured)",
+    )
+    sp.add_argument("action", choices=["up", "status", "stop", "down", "logs", "nuke"])
+    sp.add_argument("--confirm", action="store_true", help="Required for `nuke` (destroys the data volume)")
+    sp = sub.add_parser(
         "migrate-serena-memories",
         parents=[common],
         help="One-shot: ship .serena/memories/*.md into cognee (project_docs + repo tag); originals stay",
@@ -259,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
                     "source": entry.source,
                     "checksum": entry.checksum,
                 }
+        print(json.dumps(data, indent=2))
+        return 1 if isinstance(data, dict) and data.get("ok") is False else 0
+
+    if args.cmd == "cognee-local":  # before _root(): host-level singleton, no repo needed
+        data = _cognee_local(args.action, confirm=args.confirm)
         print(json.dumps(data, indent=2))
         return 1 if isinstance(data, dict) and data.get("ok") is False else 0
 

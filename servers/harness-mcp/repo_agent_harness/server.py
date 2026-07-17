@@ -33,6 +33,7 @@ except ImportError as exc:  # pragma: no cover
 from repo_agent_harness import (
     capture,
     cognee_client,
+    cognee_local,
     context,
     deploy,
     drift,
@@ -78,6 +79,62 @@ async def _cancel(task: asyncio.Task | None) -> None:
         await task
 
 
+def _ensure_local_if_enabled() -> str | None:
+    """Bring up the local cognee fallback iff enabled; blocking, so run via ``asyncio.to_thread``.
+
+    Both the enablement gate (which probes ``docker info``) and the container boot run
+    subprocesses, so this must never touch the event loop directly.
+    """
+    if not cognee_local.enabled():
+        return None
+    # Generous budget: the first-ever boot on a fresh volume runs alembic migrations and can far
+    # exceed a normal restart. This runs in a background thread, so waiting costs nothing.
+    return cognee_local.ensure_local(300.0)
+
+
+class _Drain:
+    """Owns the capture-drain task so it can be started at boot OR once local cognee comes up.
+
+    A remote-configured server starts it immediately; a local-fallback server starts it from the
+    background ``_bring_up_local`` task the moment the container answers. Idempotent: a second
+    ``start`` (e.g. remote already running) is a no-op.
+    """
+
+    def __init__(self, root: str | None) -> None:
+        """Bind the worktree root; the drain only ever runs inside a repo."""
+        self._root = root
+        self._brain: capture.BrainCapture | None = None
+        self._task: asyncio.Task | None = None
+
+    def start(self, client: cognee_client.CogneeClient) -> None:
+        """Start the drain against ``client`` unless there is no repo or one is already running."""
+        if self._root is None or self._brain is not None:
+            return
+        self._brain = capture.BrainCapture(self._root, client)
+        self._task = asyncio.create_task(self._brain.run())
+
+    async def stop(self) -> None:
+        """Signal the drain to stop and await its exit (no-op when it never started)."""
+        if self._brain is not None:
+            self._brain.stop()
+        await _cancel(self._task)
+
+
+async def _bring_up_local(drain: _Drain) -> None:
+    """Best-effort background bring-up of local cognee; rebuild the client and start the drain.
+
+    Never blocks startup: cold boot can take ~15s plus a one-time image pull. The capture queue
+    is durable, so hooks firing before the backend answers lose nothing — the drain catches up.
+    """
+    base = await asyncio.to_thread(_ensure_local_if_enabled)
+    if not base:
+        return
+    cognee_client.reset_client()
+    rebuilt = cognee_client.get_client()
+    if rebuilt.configured:
+        drain.start(rebuilt)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     """Run the worktree watcher for the server's lifetime and reap Serena on shutdown.
@@ -118,11 +175,15 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     # does not pay the full cold-boot (spawn + LSP start) cost while the UI waits.
     warm_task = _serena.warm() if root else None
     perception_task = asyncio.create_task(perception_daemon.run()) if perception_daemon else None
-    # Capture drain: ship hook-enqueued rows to cognee in-process. Only when configured —
-    # without a remote there is nothing to drain into (and hooks don't enqueue either).
+    # Capture drain: ship hook-enqueued rows to cognee in-process. Only when configured — a
+    # remote now, or a local container once it is up. Local auto-start is opt-in
+    # (COGNEE_LOCAL_ENABLE=1); by default the server never boots local unprompted, so a machine
+    # with a remote it merely failed to inherit can't spin up a split-brain second store.
     cognee = cognee_client.get_client()
-    brain = capture.BrainCapture(root, cognee) if root and cognee.configured else None
-    brain_task = asyncio.create_task(brain.run()) if brain else None
+    drain = _Drain(root)
+    if cognee.configured:
+        drain.start(cognee)
+    local_task = asyncio.create_task(_bring_up_local(drain)) if root and not cognee.configured else None
     try:
         yield {}
     finally:
@@ -133,9 +194,8 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
         if repo_watcher is not None:
             repo_watcher.stop()
         await _cancel(watch_task)
-        if brain is not None:
-            brain.stop()
-        await _cancel(brain_task)
+        await _cancel(local_task)
+        await drain.stop()
         with suppress(RuntimeError):  # defensive: the child dies with our stdio anyway
             await _serena.aclose()
 
