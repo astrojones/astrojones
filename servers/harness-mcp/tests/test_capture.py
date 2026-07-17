@@ -374,34 +374,16 @@ def test_capture_constants_match_mem_ssot():
     assert capture.CAPTURE_NODE_SET == [mem.NODE_SET_SESSION_DIGEST]
 
 
-async def test_drain_runs_memify_after_cognify_and_stamps(tmp_path, monkeypatch):
-    """Post-ingest memify distills CODING_RULES server-side; a run stamps the memify heartbeat."""
+async def test_drain_does_not_run_memify(tmp_path, monkeypatch):
+    """Drain ships via add + cognify only; memify (unread by CHUNKS recall) is not run."""
     monkeypatch.setenv(digest_providers.PROVIDER_ENV, "off")
     root = str(tmp_path)
     capture.enqueue(root, "stop", {"a": 1})
     fake = FakeCognee(datasets=[capture.CAPTURE_DATASET])
     brain = capture.BrainCapture(root, _wired(fake))
     await brain._drain_once()
-    assert any(path == "/api/v1/memify" for _, path, _ in fake.requests)
-    assert "memify" in paths.read_hook_heartbeats(root)
-
-
-async def test_drain_survives_memify_failure(tmp_path, monkeypatch):
-    """Memify is enrichment, not shipping: its failure must not fail the drain or keep rows."""
-    monkeypatch.setenv(digest_providers.PROVIDER_ENV, "off")
-    root = str(tmp_path)
-    capture.enqueue(root, "stop", {"a": 1})
-    fake = FakeCognee(datasets=[capture.CAPTURE_DATASET])
-    brain = capture.BrainCapture(root, _wired(fake))
-
-    async def _boom(*args, **kwargs):
-        msg = "memify down"
-        raise RuntimeError(msg)
-
-    monkeypatch.setattr(brain._client, "memify", _boom)
-    shipped = await brain._drain_once()
-    assert shipped == 1
-    assert capture.pending_count(root) == 0
+    assert not any(path == "/api/v1/memify" for _, path, _ in fake.requests)
+    assert "memify" not in paths.read_hook_heartbeats(root)
     assert "memify" not in paths.read_hook_heartbeats(root)
 
 

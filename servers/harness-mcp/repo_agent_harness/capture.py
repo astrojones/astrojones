@@ -201,12 +201,13 @@ class BrainCapture:
         for node_set, docs in self._ship_groups(result, entries):
             await self._client.add(docs, dataset, node_set, run_in_background=False)
         await self._client.cognify(dataset, run_in_background=True)
-        # memify distills CODING_RULES and consolidates entities server-side. Enrichment,
-        # not shipping: a memify hiccup must never fail the drain (rows are already added),
-        # so it runs fail-open, and only a successful run stamps the job heartbeat.
-        with contextlib.suppress(Exception):
-            await self._client.memify(dataset, run_in_background=True)
-            paths.stamp_hook_heartbeat(self.root, "memify")
+        # No memify: its default pass only re-embeds graph triplets into the Triplet_text
+        # vector collection, which recall never reads — recall is CHUNKS over
+        # DocumentChunk_text scoped to session_digest. In the API mode this harness uses,
+        # memify also can't distil coding rules (that path is MCP-direct-only), so the pass
+        # was pure per-drain embedding cost for output nothing here consumes. Reintroduce it
+        # (scoped to CAPTURE_NODE_SET) only if recall adopts TRIPLET_COMPLETION. Manual runs
+        # remain available via `mem.run_memify` / the `memify` CLI command.
         await asyncio.to_thread(self._delete, [row_id for row_id, *_ in rows])
         return len(rows)
 
