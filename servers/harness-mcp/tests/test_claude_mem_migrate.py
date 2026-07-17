@@ -343,9 +343,22 @@ async def test_raw_execution_ships_per_project_batches_readonly(store):
     assert out.per_project == {"alpha": 5, "beta": 3}
     adds = _adds(fake)
     node_sets = {tuple(p["node_set"]) for p in adds}
-    assert (mem.NODE_SET_CLAUDE_MEM_IMPORT, f"{mem.PROJECT_TAG_PREFIX}alpha", "extra") in node_sets
-    assert (mem.NODE_SET_CLAUDE_MEM_IMPORT, f"{mem.PROJECT_TAG_PREFIX}beta", "extra") in node_sets
+    # raw/digest docs render as session digests, so they carry session_digest too — this is
+    # what makes migrated claude-mem history visible to session-start recall.
+    imp, dig = mem.NODE_SET_CLAUDE_MEM_IMPORT, mem.NODE_SET_SESSION_DIGEST
+    assert (imp, f"{mem.PROJECT_TAG_PREFIX}alpha", dig, "extra") in node_sets
+    assert (imp, f"{mem.PROJECT_TAG_PREFIX}beta", dig, "extra") in node_sets
     assert store.read_bytes() == before  # read-only guarantee: the source store is untouched
+
+
+async def test_digest_and_raw_tag_session_digest_summaries_do_not(store):
+    """digest/raw imports carry session_digest (recall-visible); summaries stay import-only."""
+    digest = await claude_mem_migrate.migrate(store, "ds", granularity="digest")
+    assert mem.NODE_SET_SESSION_DIGEST in digest.node_set
+    raw = await claude_mem_migrate.migrate(store, "ds", granularity="raw")
+    assert mem.NODE_SET_SESSION_DIGEST in raw.node_set
+    summaries = await claude_mem_migrate.migrate(store, "ds", granularity="summaries-only")
+    assert mem.NODE_SET_SESSION_DIGEST not in summaries.node_set
 
 
 async def test_second_run_resumes_and_ships_zero(store):

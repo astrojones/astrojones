@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 DEFAULT_DB = Path("~/.claude-mem/claude-mem.db")
 GRANULARITIES = ("summaries-only", "digest", "raw")
+# Granularities whose docs are rendered as session digests (see _render_digest_*): they also
+# carry the session_digest node_set so session-start recall (node_name=session_digest) finds
+# them, matching the "session_digest" label already stamped in the doc trailer.
+_DIGEST_GRANULARITIES = frozenset({"digest", "raw"})
 
 _FALLBACK_DOC_CHARS = 4000  # bound for the no-LLM titles+facts concat doc
 
@@ -521,7 +525,11 @@ async def migrate(  # noqa: PLR0913, PLR0911 - the filter surface mirrors the CL
         per_type=_per_type(observations, summaries),
         estimated_docs=len(estimate_texts),
         skipped_dedup=skipped,
-        node_set=[mem.NODE_SET_CLAUDE_MEM_IMPORT, *(node_set or [])],
+        node_set=[
+            mem.NODE_SET_CLAUDE_MEM_IMPORT,
+            *([mem.NODE_SET_SESSION_DIGEST] if granularity in _DIGEST_GRANULARITIES else []),
+            *(node_set or []),
+        ],
         estimate=estimate,
     )
     if dry_run:
