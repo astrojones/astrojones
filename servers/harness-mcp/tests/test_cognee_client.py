@@ -159,6 +159,19 @@ async def test_memify_posts_camelcase_payload():
     await client.aclose()
 
 
+async def test_search_forwards_node_name_filter():
+    """search() sends nodeName (the belongs_to_set filter) only when given; omitted otherwise."""
+    fake = FakeCognee(datasets=["kolbe"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.search("q", "CHUNKS", "kolbe", 5)
+    payload = [pl for _, p, pl in fake.requests if p == "/api/v1/search"][-1]
+    assert "nodeName" not in payload
+    await client.search("q", "CHUNKS", "kolbe", 5, node_name=["session_digest"])
+    payload = [pl for _, p, pl in fake.requests if p == "/api/v1/search"][-1]
+    assert payload["nodeName"] == ["session_digest"]
+    await client.aclose()
+
+
 async def test_update_data_patches_multipart_like_add():
     """PATCH /api/v1/update speaks the same multipart dialect as /add."""
     fake = FakeCognee(datasets=["kolbe"])

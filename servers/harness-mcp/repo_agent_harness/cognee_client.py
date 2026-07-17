@@ -322,11 +322,20 @@ class CogneeClient:
         search_type: str,
         dataset: str | None,
         top_k: int,
+        node_name: list[str] | None = None,
     ) -> Json:
-        """POST /api/v1/search (camelCase payload per the live OpenAPI)."""
+        """POST /api/v1/search (camelCase payload per the live OpenAPI).
+
+        ``node_name`` restricts results to those node-set tags (the belongs_to_set filter,
+        wired as ``nodeName``); omitted entirely when not given so the search spans the whole
+        dataset. Verified against the live pgvector deployment: both CHUNKS and
+        GRAPH_COMPLETION honour it, so recall can fetch only its own digests.
+        """
         payload: dict[str, Json] = {"query": query, "searchType": search_type, "topK": top_k}
         if dataset:
             payload["datasets"] = [dataset]
+        if node_name:
+            payload["nodeName"] = list(node_name)
         return await self.request("POST", "/api/v1/search", json=payload)
 
     async def add(

@@ -51,6 +51,17 @@ async def test_search_returns_shaped_result():
     assert payload["topK"] == 10
 
 
+async def test_search_forwards_node_name_to_client():
+    """mem.search threads MemSearchIn.node_name into the cognee /search payload (nodeName)."""
+    fake = FakeCognee(datasets=["kolbe"])
+    await mem.search(
+        MemSearchIn(query="q", search_type="CHUNKS", dataset="kolbe", node_name=["session_digest"]),
+        client=_wired(fake),
+    )
+    payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
+    assert payload["nodeName"] == ["session_digest"]
+
+
 def test_search_input_rejects_unknown_type():
     """The search_type vocabulary is enforced by the input model, before any network."""
     with pytest.raises(ValueError, match="search_type"):

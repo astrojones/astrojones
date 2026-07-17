@@ -67,6 +67,9 @@ class MemSearchIn(BaseModel):
     query: str = Field(..., description="Natural-language query against the memory graph")
     search_type: Literal["GRAPH_COMPLETION", "CHUNKS", "TEMPORAL", "CODING_RULES"] = "GRAPH_COMPLETION"
     dataset: str | None = Field(None, description="Dataset name; None = the user's default scope")
+    node_name: list[str] | None = Field(
+        None, description="Restrict to these node_set tags (belongs_to_set filter); None = the whole dataset"
+    )
     top_k: int = Field(10, ge=1, le=50)
 
 

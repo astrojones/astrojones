@@ -104,7 +104,9 @@ def _error(exc: CogneeError, estimate: MemIngestEstimate | None = None) -> MemEr
 async def search(inp: MemSearchIn, client: CogneeClient | None = None) -> MemSearchResult | MemError:
     """Query the durable memory graph."""
     try:
-        results = await _client(client).search(inp.query, inp.search_type, inp.dataset, inp.top_k)
+        results = await _client(client).search(
+            inp.query, inp.search_type, inp.dataset, inp.top_k, node_name=inp.node_name
+        )
     except CogneeError as exc:
         return _error(exc)
     return MemSearchResult(results=results, search_type=inp.search_type, dataset=inp.dataset)
