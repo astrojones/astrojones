@@ -244,9 +244,9 @@ def pre_compact(data: dict, root: str | None = None) -> dict:
 # SessionStart recall: the ONE hook allowed a network call, bounded and fail-open. Every
 # other hook stays enqueue-only/local by hard rule — a turn must never block on cognee.
 _RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
-# Once per session, so a few seconds is acceptable. Recall uses GRAPH_COMPLETION (graph
-# retrieval + server-side LLM synthesis), heavier than a raw chunk fetch; a live cold
-# roundtrip (TLS + login + synthesis) can run ~5-7s, hence 8s rather than the old 5.
+# Once per session, so a few seconds is acceptable. Recall uses CHUNKS (verbatim chunk
+# retrieval, no server-side synthesis), but a live cold roundtrip still pays TLS + login +
+# vector search; 8s leaves headroom over the observed ~3-4s cold path.
 _RECALL_TIMEOUT_S = 8.0
 _RECALL_TOP_K = 5
 # A GRAPH_COMPLETION answer is one synthesized paragraph, not a short chunk — keep it whole
@@ -346,8 +346,12 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     marker); ``None`` spans the user's default scope (every dataset), the fallback for repos
     not yet onboarded and for multi-repo projects that share one dataset.
 
-    Uses GRAPH_COMPLETION, which returns a synthesized answer over the graph — CHUNKS instead
-    surfaces raw captured chatter (e.g. a stored "Got it.") rather than distilled knowledge.
+    Uses CHUNKS filtered to the ``session_digest`` node set (``capture.CAPTURE_NODE_SET``):
+    verbatim retrieval of this harness's own session digests, no server-side LLM synthesis.
+    The node-set filter is what keeps recall clean — an unfiltered GRAPH_COMPLETION over the
+    whole dataset also drags in cognee's own session-memory/self-improvement chatter (e.g. a
+    stored "Got it."), whereas scoping to ``session_digest`` returns only distilled digests.
+    Filtering verified against the live pgvector deployment.
 
     ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
     the caller simply omits the section rather than aborting session start.
@@ -355,7 +359,7 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
 
     try:
-        from repo_agent_harness import cognee_client, mem  # noqa: PLC0415 - lazy: pulls in httpx
+        from repo_agent_harness import capture, cognee_client, mem  # noqa: PLC0415 - lazy: pulls in httpx
         from repo_agent_harness.models import MemSearchIn, MemSearchResult  # noqa: PLC0415 - lazy
     except ImportError:
         return None
@@ -363,7 +367,13 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     if not c.configured:
         return None
     query = f"Project {name}: recent work, decisions, open threads, and gotchas"
-    inp = MemSearchIn(query=query, search_type="GRAPH_COMPLETION", dataset=dataset, top_k=_RECALL_TOP_K)
+    inp = MemSearchIn(
+        query=query,
+        search_type="CHUNKS",
+        dataset=dataset,
+        top_k=_RECALL_TOP_K,
+        node_name=list(capture.CAPTURE_NODE_SET),
+    )
     timeout = float(os.environ.get(_RECALL_TIMEOUT_ENV, _RECALL_TIMEOUT_S))
     try:
         out = asyncio.run(asyncio.wait_for(mem.search(inp, client=c), timeout))

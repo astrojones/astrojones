@@ -193,8 +193,12 @@ def test_session_start_injects_recall(repo, monkeypatch):
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "Durable-memory recall" in ctx
-    # Recall synthesizes over the graph (GRAPH_COMPLETION), not raw chunk retrieval.
-    assert "canned:GRAPH_COMPLETION" in ctx
+    # Recall fetches verbatim digests via CHUNKS scoped to the session_digest node set —
+    # no server-side synthesis, and the filter excludes cognee's own chatter nodes.
+    assert "canned:CHUNKS" in ctx
+    payload = _recall_search_payload(fake)
+    assert payload["searchType"] == "CHUNKS"
+    assert payload["nodeName"] == ["session_digest"]
 
 
 def _recall_search_payload(fake):
