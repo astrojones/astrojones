@@ -375,13 +375,19 @@ async def test_claude_subscription_provider_falls_back_when_cli_missing(monkeypa
     assert await provider.digest("prompt", "claude-sonnet-5") is None
 
 
-async def test_claude_subscription_provider_always_passes_bare(tmp_path):
-    """The whole incident: without --bare, the spawned process re-triggers this repo's hooks."""
+async def test_claude_subscription_provider_always_passes_bare_and_sentinel(tmp_path):
+    """The whole incident: without --bare, the spawned process re-triggers this repo's hooks.
+
+    Also asserts the Leg 1 env sentinel reaches the child, so capture.enqueue no-ops even if a
+    hook does load — belt-and-braces independent of --bare.
+    """
     argv_file = tmp_path / "argv.json"
+    env_file = tmp_path / "env.txt"
     shim = tmp_path / "claude"
     shim.write_text(
         "#!/bin/sh\n"
         f"python3 -c \"import json,sys; json.dump(sys.argv[1:], open('{argv_file}', 'w'))\" \"$@\"\n"
+        f'printf "%s" "${dp.DIGEST_SUBPROCESS_ENV}" > "{env_file}"\n'
         'echo "digested output"\n'
     )
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
@@ -393,6 +399,7 @@ async def test_claude_subscription_provider_always_passes_bare(tmp_path):
     argv = json.loads(argv_file.read_text())
     assert "--bare" in argv
     assert "prompt text" in argv
+    assert env_file.read_text() == "1"
 
 
 async def test_claude_subscription_provider_nonzero_exit_returns_none(tmp_path):
@@ -432,12 +439,18 @@ async def test_claude_sdk_provider_returns_structured_output_as_json(monkeypatch
     assert seen["options"]["max_turns"] == 1
 
 
-async def test_claude_sdk_provider_never_sets_setting_sources(monkeypatch):
-    """The incident guard: SDK default = no user settings/plugins/hooks. Must stay unset."""
+async def test_claude_sdk_provider_suppresses_hooks_and_sets_sentinel(monkeypatch):
+    """The self-feed guard (post 2026-07-16).
+
+    Omitting setting_sources let the CLI load its own user+project default (hooks). Both legs
+    must be present: setting_sources=[] (empty → ``--setting-sources=`` → load nothing) AND the
+    env sentinel that makes enqueue a no-op.
+    """
     seen = {}
     _install_fake_sdk(monkeypatch, messages=[_FakeResultMessage(result="x")], seen=seen)
     await dp.ClaudeAgentSdkProvider(fallback=None).digest("p", "m")
-    assert "setting_sources" not in seen["options"]
+    assert seen["options"]["setting_sources"] == []
+    assert seen["options"]["env"] == {dp.DIGEST_SUBPROCESS_ENV: "1"}
 
 
 async def test_claude_sdk_provider_requests_json_schema_output(monkeypatch):

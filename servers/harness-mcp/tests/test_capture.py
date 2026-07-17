@@ -56,6 +56,47 @@ def test_enqueue_caps_payload_and_queue(tmp_path, monkeypatch):
     assert capture.pending_count(str(tmp_path)) == 5
 
 
+def test_enqueue_noops_inside_digest_subprocess(tmp_path, monkeypatch):
+    """Leg 1 source-cut: with the digest sentinel set, enqueue drops (no row, returns False).
+
+    This is what breaks the self-feed loop — a digest subprocess (or a hook it spawns) that
+    tries to re-enqueue while draining is refused at the single chokepoint.
+    """
+    monkeypatch.setenv(digest_providers.DIGEST_SUBPROCESS_ENV, "1")
+    assert capture.enqueue(str(tmp_path), "stop", {"x": 1}) is False
+    assert capture.pending_count(str(tmp_path)) == 0
+
+
+def test_spawned_digest_subprocess_enqueues_nothing(tmp_path, isolated_harness_home):
+    """Regression for the 2026-07-16 self-feed.
+
+    A *fresh process* carrying the sentinel (exactly how a digest-spawned hook runs) must not
+    add a row, proving the guard survives process boundaries rather than relying on in-process
+    monkeypatching.
+    """
+    import os as _os
+    import subprocess
+    import sys
+
+    root = str(tmp_path)
+    # Sanity: without the sentinel, the same call DOES enqueue.
+    capture.enqueue(root, "stop", {"baseline": 1})
+    assert capture.pending_count(root) == 1
+
+    env = {**_os.environ, digest_providers.DIGEST_SUBPROCESS_ENV: "1"}
+    code = (
+        "from repo_agent_harness import capture;"
+        f"ok = capture.enqueue({root!r}, 'stop', {{'from': 'digest_child'}});"
+        "print('accepted' if ok else 'dropped')"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "dropped"
+    # The child added nothing; only the baseline row from the parent remains.
+    assert capture.pending_count(root) == 1
+
+
 def _queue_payloads(root: str) -> list[str]:
     """Raw payload column straight from the queue DB — what the digest will see."""
     with contextlib.closing(sqlite3.connect(capture.queue_db(root))) as conn:
@@ -362,6 +403,46 @@ async def test_drain_survives_memify_failure(tmp_path, monkeypatch):
     assert shipped == 1
     assert capture.pending_count(root) == 0
     assert "memify" not in paths.read_hook_heartbeats(root)
+
+
+# ---------------------------------------------------------------- drain circuit-breaker
+
+
+def test_next_delay_partial_batch_waits_full_poll(tmp_path):
+    """Leg 3: an empty or partial pass has no backlog — wait the full poll, not the floor."""
+    brain = capture.BrainCapture(str(tmp_path), None, poll_seconds=7.0, batch_size=50)
+    assert brain._next_delay(0) == pytest.approx(7.0)
+    assert brain._next_delay(49) == pytest.approx(7.0)
+
+
+def test_next_delay_full_batch_floors_then_caps(tmp_path, monkeypatch):
+    """Leg 3: full batches loop at the floor, but a runaway re-feed is capped.
+
+    Full batches never zero-sleep (floor), and after _MAX_DRAINS_PER_MINUTE full drains inside
+    the trailing minute the loop backs off to the full poll.
+    """
+    monkeypatch.setattr(capture, "_MAX_DRAINS_PER_MINUTE", 3)
+    monkeypatch.setattr(capture, "_MIN_DRAIN_INTERVAL_S", 1.0)
+    # Freeze monotonic so all drains land inside the same trailing minute.
+    monkeypatch.setattr(capture.time, "monotonic", lambda: 1000.0)
+    brain = capture.BrainCapture(str(tmp_path), None, poll_seconds=7.0, batch_size=50)
+    assert brain._next_delay(50) == pytest.approx(1.0)  # 1 in window → floor
+    assert brain._next_delay(50) == pytest.approx(1.0)  # 2 in window → floor
+    assert brain._next_delay(50) == pytest.approx(7.0)  # 3rd trips the cap → back off to poll
+    assert brain._next_delay(50) == pytest.approx(7.0)  # stays capped while the minute is saturated
+
+
+def test_next_delay_cap_window_slides(tmp_path, monkeypatch):
+    """Old full-drain timestamps age out of the trailing minute, releasing the cap."""
+    monkeypatch.setattr(capture, "_MAX_DRAINS_PER_MINUTE", 2)
+    monkeypatch.setattr(capture, "_MIN_DRAIN_INTERVAL_S", 1.0)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(capture.time, "monotonic", lambda: clock["t"])
+    brain = capture.BrainCapture(str(tmp_path), None, poll_seconds=7.0, batch_size=50)
+    assert brain._next_delay(50) == pytest.approx(1.0)
+    assert brain._next_delay(50) == pytest.approx(7.0)  # 2 in window trips the cap
+    clock["t"] += 61.0  # both prior drains age past the 60s window
+    assert brain._next_delay(50) == pytest.approx(1.0)  # window cleared → floor again
 
 
 def test_ship_groups_canonicalizes_concept_order():

@@ -1,15 +1,24 @@
 """Pluggable backends for capture.py's digest-on-drain: one interface, three swappable providers.
 
-Incident 2026-07-13: the original implementation shelled out to the locally-authenticated
-``claude`` CLI in print mode, without ``--bare``. That let the spawned process load this
-repo's own hooks, so its own Stop hook re-enqueued a row into the queue it had just drained —
-a self-feeding loop that spawned 2000+ full Claude Code processes in six hours, each paying a
-fresh ~60k-token cold start (no cache reuse across processes), against the Anthropic
-subscription. Fixed two ways: ``ClaudeSubscriptionProvider`` always passes ``--bare``, and the
-default backend never loads user configuration at all — ``ClaudeAgentSdkProvider`` runs a
-one-shot ``claude_agent_sdk.query()`` without ``setting_sources``, whose SDK default loads NO
-user settings, plugins, or hooks, structurally excluding the self-feeding incident class. The
-SDK's value here is structured output (typed observations instead of free text), not
+Incident 2026-07-13 / re-incident 2026-07-16: digesting a capture batch spawns a Claude
+process in this repo; if that process loads this repo's own hooks, its Stop hook re-enqueues
+a row into the queue it just drained — a self-feeding loop that spawned ~1730 full Claude Code
+processes, each paying a fresh cold start against the Anthropic subscription. The 07-13 fix
+rested on one premise: ``ClaudeAgentSdkProvider`` omits ``setting_sources``, whose SDK default
+"loads no user settings, plugins, or hooks." That premise was FALSE — omitting the flag makes
+the SDK send no ``--setting-sources`` at all, and the CLI's own default then loads user +
+project settings (hence hooks). The loop came back through the SDK path.
+
+Defense-in-depth now, so no single false assumption can re-open it:
+  1. Source cut (strongest): every digest spawn (SDK and ``--bare`` CLI) sets the
+     ``DIGEST_SUBPROCESS_ENV`` sentinel in the child's environment; ``capture.enqueue`` is a
+     hard no-op whenever that sentinel is present, so a digest subprocess cannot write to the
+     queue regardless of which hooks load.
+  2. Actually suppress hooks: ``ClaudeAgentSdkProvider`` passes ``setting_sources=[]``
+     explicitly (empty list → ``--setting-sources=`` → load nothing), not by omission.
+  3. Drain circuit-breaker (capture.py): a per-batch floor + per-minute cap so even a future
+     re-feed cannot run away.
+The SDK's value here is structured output (typed observations instead of free text), not
 availability redundancy: when the SDK itself is broken/absent it delegates to the ``--bare``
 CLI, and anything else fails open to shipping raw entries.
 
@@ -35,6 +44,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 PROVIDER_ENV = "BRAIN_DIGEST_PROVIDER"
 PROVIDER_DEFAULT = "claude-sdk"
 MODEL_ENV = "BRAIN_DIGEST_MODEL"
+
+# Leg 1 of the self-feed defense: set in every digest-spawned child's environment (SDK and
+# CLI). ``capture.enqueue`` hard-drops when this is present, so a digest subprocess — and any
+# hook it spawns, which inherits the env — can never write back into the queue it is draining,
+# regardless of which hooks load. capture.py reads this name; keep them in sync.
+DIGEST_SUBPROCESS_ENV = "REPO_AGENT_HARNESS_IN_DIGEST"
 
 MODEL_DEFAULTS = {
     "claude-sdk": "claude-sonnet-5",
@@ -226,6 +241,9 @@ class ClaudeSubscriptionProvider:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
                 stdin=asyncio.subprocess.DEVNULL,
+                # Leg 1 source-cut: the sentinel makes capture.enqueue a no-op in this child
+                # and any hook it spawns, so a digest process cannot re-feed the queue.
+                env={**os.environ, DIGEST_SUBPROCESS_ENV: "1"},
             )
         except OSError:
             return None  # CLI not installed — raw entries it is
@@ -276,10 +294,16 @@ class ClaudeAgentSdkProvider:
 
     @staticmethod
     async def _query(sdk, prompt: str, model: str) -> str | None:  # noqa: ANN001 - lazy module, typed as Any
-        # setting_sources deliberately NOT passed: the SDK default loads no user config.
+        # setting_sources=[] (Leg 2): an empty list makes the SDK emit `--setting-sources=`,
+        # which loads NO user/project settings, plugins, or hooks. Omitting it does the
+        # opposite — the CLI then falls back to its own user+project default and loads hooks,
+        # the 2026-07-16 re-incident. env sentinel (Leg 1) is independent belt-and-braces:
+        # even if a hook somehow loads, capture.enqueue drops in a sentinel-marked child.
         options = sdk.ClaudeAgentOptions(
             model=model,
             max_turns=1,
+            setting_sources=[],
+            env={DIGEST_SUBPROCESS_ENV: "1"},
             output_format={"type": "json_schema", "schema": _OBSERVATIONS_SCHEMA},
         )
         async for message in sdk.query(prompt=prompt, options=options):

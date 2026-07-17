@@ -14,10 +14,12 @@ resume on the next server start — the accepted cost: no drain runs between ses
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import functools
 import json
 import logging
+import os
 import sqlite3
 import time
 from typing import TYPE_CHECKING
@@ -42,6 +44,13 @@ _MAX_PAYLOAD_CHARS = 8_000
 # Backstop against a never-draining queue (cognee never configured / down for weeks):
 # enqueue prunes the oldest rows beyond this cap, so the local footprint stays bounded.
 _MAX_QUEUE_ROWS = 10_000
+
+# Leg 3 of the self-feed defense: drain circuit-breaker. After a full batch the loop keeps
+# draining a genuine backlog, but never with zero delay (the old spin) and never faster than
+# the per-minute cap — so a future re-feed that keeps refilling the queue cannot burn a
+# provider in a tight loop. At 50 rows/batch the cap still allows ~1000 legit rows/minute.
+_MIN_DRAIN_INTERVAL_S = 1.0
+_MAX_DRAINS_PER_MINUTE = 20
 
 
 def queue_db(root: str) -> Path:
@@ -78,8 +87,14 @@ def _secrets_cfg(root: str) -> secrets.SecretsConfig:
 def enqueue(root: str, event: str, payload: dict | None) -> bool:
     """One INSERT-commit-close from a hook. Fail-open: never raises, never touches the network.
 
-    Returns True when the row was accepted; False on the fail-open drop.
+    Returns True when the row was accepted; False on the fail-open (or sentinel) drop.
     """
+    # Leg 1 source-cut against the digest self-feed: a digest subprocess (and any hook it
+    # spawns, which inherits the env) runs with DIGEST_SUBPROCESS_ENV set. Refuse to write
+    # from inside one — this is the single chokepoint every enqueue caller passes through, so
+    # the loop cannot re-form no matter which hooks the child loads.
+    if os.environ.get(digest_providers.DIGEST_SUBPROCESS_ENV):
+        return False
     try:
         # Redact before the row hits disk: digest and ship read the queue verbatim, so this
         # is the single scrub point. A redaction failure falls into the blanket except below
@@ -132,6 +147,8 @@ class BrainCapture:
         self._poll_seconds = poll_seconds
         self._batch_size = batch_size
         self._stop = asyncio.Event()
+        # monotonic timestamps of recent full-batch drains, for the per-minute rate cap.
+        self._drain_times: collections.deque[float] = collections.deque()
 
     def stop(self) -> None:
         """Signal the drain loop to exit (wakes the poll sleep)."""
@@ -145,10 +162,33 @@ class BrainCapture:
             except Exception:  # noqa: BLE001 - drain failure must never crash the server
                 LOG.debug("capture drain failed for %s", self.root, exc_info=True)
                 shipped = 0
-            # An empty or failed pass waits the full poll; after a full batch keep draining.
-            if shipped < self._batch_size:
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._stop.wait(), self._poll_seconds)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), self._next_delay(shipped))
+
+    def _next_delay(self, shipped: int) -> float:
+        """Seconds to sleep before the next drain (circuit-breaker, Leg 3).
+
+        An empty or partial pass waits the full poll. A full batch normally means more backlog,
+        so we loop quickly — but floored at ``_MIN_DRAIN_INTERVAL_S`` (never the old zero-sleep
+        spin) and capped at ``_MAX_DRAINS_PER_MINUTE``: once that many full drains land inside
+        the trailing minute we back off to the full poll, so a re-feed that keeps refilling the
+        queue cannot drive the digest provider in a tight loop.
+        """
+        if shipped < self._batch_size:
+            return self._poll_seconds
+        now = time.monotonic()
+        self._drain_times.append(now)
+        cutoff = now - 60.0
+        while self._drain_times and self._drain_times[0] < cutoff:
+            self._drain_times.popleft()
+        if len(self._drain_times) >= _MAX_DRAINS_PER_MINUTE:
+            LOG.warning(
+                "capture drain rate cap hit for %s (%d full drains/min) — backing off to full poll",
+                self.root,
+                len(self._drain_times),
+            )
+            return self._poll_seconds
+        return _MIN_DRAIN_INTERVAL_S
 
     async def _drain_once(self) -> int:
         """Ship one batch: read rows, digest (optional), add + background cognify, delete rows."""
