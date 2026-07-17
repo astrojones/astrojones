@@ -1,4 +1,7 @@
 {
+  "enabledPlugins": {
+    "astrojones@astrojones": false
+  },
   "extraKnownMarketplaces": {
     "astrojones": {
       "source": {
@@ -6,8 +9,5 @@
         "repo": "astrojones/claude-plugins"
       }
     }
-  },
-  "enabledPlugins": {
-    "astrojones@astrojones": true
   }
 }
