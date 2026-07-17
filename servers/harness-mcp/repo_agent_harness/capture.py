@@ -197,7 +197,9 @@ class BrainCapture:
             return 0
         entries = [self._render(created_at, event, payload) for _, created_at, event, payload in rows]
         result = await digest_providers.digest(entries)
-        dataset = paths.onboarded_dataset(self.root) or CAPTURE_DATASET
+        from repo_agent_harness import mem  # noqa: PLC0415 - lazy: drain runs in-server; keep the hook path light
+
+        dataset = mem.resolve_dataset(self.root)
         for node_set, docs in self._ship_groups(result, entries):
             await self._client.add(docs, dataset, node_set, run_in_background=False)
         await self._client.cognify(dataset, run_in_background=True)

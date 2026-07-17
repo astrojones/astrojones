@@ -88,7 +88,7 @@ class MemIngestIn(BaseModel):
     """Input model for mem_ingest."""
 
     items: list[str] = Field(..., description="Curated documents to ingest")
-    dataset: str = Field(..., description="Target dataset name")
+    dataset: str | None = Field(None, description="Target dataset name; None resolves to the repo's onboarded dataset")
     node_set: list[str] | None = Field(None, description="Category tags applied to every item")
     ontology_key: str | None = Field(
         None,

@@ -658,17 +658,17 @@ def repo_deploy_logs(
 @mcp.tool()
 async def mem_search(inp: models.MemSearchIn) -> dict:
     """Recall from the durable memory graph (remote cognee)."""
-    return (await mem.search(inp)).model_dump(exclude_none=True)
+    return (await mem.search(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()
 async def mem_rules(
     query: Annotated[str, Field(description="What rules to retrieve, e.g. 'python error handling'")],
     top_k: Annotated[int, Field(ge=1, le=50)] = 10,
-    dataset: Annotated[str | None, Field(description="Dataset name; None = the user's default span-all scope")] = None,
+    dataset: Annotated[str | None, Field(description="Dataset name; None = the repo's onboarded dataset")] = None,
 ) -> dict:
     """Retrieve distilled coding rules from memory (CODING_RULES search)."""
-    return (await mem.rules(query, top_k, dataset)).model_dump(exclude_none=True)
+    return (await mem.rules(query, top_k, dataset, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()
@@ -680,7 +680,7 @@ async def mem_remember(inp: models.MemRememberIn) -> dict:
 @mcp.tool()
 async def mem_ingest(inp: models.MemIngestIn) -> dict:
     """Bulk-ingest curated items — cost-gated (refuses expensive runs unless confirm=true)."""
-    return (await mem.ingest(inp)).model_dump(exclude_none=True)
+    return (await mem.ingest(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()

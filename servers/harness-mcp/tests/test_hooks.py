@@ -221,14 +221,14 @@ def test_session_start_recall_scoped_to_onboarded_dataset(repo, monkeypatch):
     assert _recall_search_payload(fake).get("datasets") == ["proj-x"]
 
 
-def test_session_start_recall_spans_all_when_not_onboarded(repo, monkeypatch):
-    """No marker -> no dataset scope (user's default span-all), preserving multi-repo projects."""
+def test_session_start_recall_scopes_to_default_when_not_onboarded(repo, monkeypatch):
+    """No marker -> recall resolves to the shared default dataset (reads match writes), not span-all."""
     from tests.fake_cognee import FakeCognee
 
     monkeypatch.chdir(repo)
     fake = FakeCognee(datasets=["agent_sessions"])
     agent_hooks.session_start({}, client=_wired_client(fake))
-    assert "datasets" not in _recall_search_payload(fake)
+    assert _recall_search_payload(fake).get("datasets") == ["agent_sessions"]
 
 
 def test_recall_lines_keeps_long_completion():

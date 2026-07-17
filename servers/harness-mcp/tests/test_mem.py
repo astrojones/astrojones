@@ -62,6 +62,40 @@ async def test_search_forwards_node_name_to_client():
     assert payload["nodeName"] == ["session_digest"]
 
 
+async def test_search_scopes_to_onboarded_dataset_by_default(tmp_path):
+    """dataset=None + a root resolves to the repo's onboarded dataset — reads match writes."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths.mark_cognee_onboarded(str(root), dataset="projX")
+    fake = FakeCognee(datasets=["projX"])
+    out = await mem.search(MemSearchIn(query="q", dataset=None), client=_wired(fake), root=str(root))
+    assert isinstance(out, MemSearchResult)
+    assert out.dataset == "projX"
+    payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
+    assert payload["datasets"] == ["projX"]
+
+
+async def test_search_scopes_to_default_without_root():
+    """No root, no dataset -> the shared default scope (not span-all) — the unified default."""
+    fake = FakeCognee()
+    await mem.search(MemSearchIn(query="q"), client=_wired(fake))
+    payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
+    assert payload["datasets"] == ["agent_sessions"]
+
+
+async def test_ingest_resolves_none_dataset_via_root(tmp_path):
+    """mem_ingest with dataset=None resolves to the onboarded dataset, unified with writes."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths.mark_cognee_onboarded(str(root), dataset="projX")
+    fake = FakeCognee(datasets=["projX"])
+    out = await mem.ingest(MemIngestIn(items=["doc"], dataset=None, confirm=True), client=_wired(fake), root=str(root))
+    assert not isinstance(out, MemError)
+    assert out.dataset == "projX"
+    add_payload = next(p for m, path, p in fake.requests if path == "/api/v1/add")
+    assert add_payload["datasetName"] == "projX"
+
+
 def test_search_input_rejects_unknown_type():
     """The search_type vocabulary is enforced by the input model, before any network."""
     with pytest.raises(ValueError, match="search_type"):
@@ -75,8 +109,8 @@ async def test_rules_is_a_coding_rules_search():
     assert out.search_type == "CODING_RULES"
     payload = next(p for m, path, p in fake.requests if path == "/api/v1/search")
     assert payload["searchType"] == "CODING_RULES"
-    # No dataset argument -> no datasets key: the user's span-all default scope.
-    assert "datasets" not in payload
+    # No root/dataset -> resolves to the shared default scope (reads agree with writes).
+    assert payload["datasets"] == ["agent_sessions"]
 
 
 async def test_rules_scopes_to_dataset_when_given():

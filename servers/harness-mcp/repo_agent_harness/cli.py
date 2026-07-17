@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         parents=[common],
         help="One-shot: ship .serena/memories/*.md into cognee (project_docs + repo tag); originals stay",
     )
-    sp.add_argument("--dataset", default=mem.DEFAULT_DATASET, help="Target cognee dataset name")
+    sp.add_argument("--dataset", default=None, help="Target dataset (default: the repo's onboarded dataset)")
     sp.add_argument("--dry-run", action="store_true", help="Only report files and cost estimate")
     sp.add_argument("--confirm", action="store_true", help="Accept an over-limit estimated cost")
     sp = sub.add_parser(

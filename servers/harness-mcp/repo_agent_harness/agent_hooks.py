@@ -446,10 +446,12 @@ def session_start(data: dict, client: CogneeClient | None = None, root: str | No
         if lines:
             sections.append(f"Repo symbol map ({name}):\n- " + "\n- ".join(lines))
 
-    # [2] Durable-memory recall — scoped to the project's own dataset when onboarded (the
-    # marker records it), else the user's default span-all scope. Contributes nothing when
-    # unconfigured/unreachable/empty.
-    recall = _recall_section(name, paths.onboarded_dataset(repo), client)
+    # [2] Durable-memory recall — scoped to the project's dataset via the same resolver the
+    # write paths use (onboarded marker wins, else the shared default), so reads and writes
+    # agree on scope. Contributes nothing when unconfigured/unreachable/empty.
+    from repo_agent_harness import mem  # noqa: PLC0415 - lazy: recall already pulls mem; keep other hooks light
+
+    recall = _recall_section(name, mem.resolve_dataset(repo), client)
     if recall:
         sections.append(recall)
 

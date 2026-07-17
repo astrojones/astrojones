@@ -101,15 +101,23 @@ def _error(exc: CogneeError, estimate: MemIngestEstimate | None = None) -> MemEr
     return MemError(error=str(exc), hint=hint, status=exc.status, estimate=estimate)
 
 
-async def search(inp: MemSearchIn, client: CogneeClient | None = None) -> MemSearchResult | MemError:
-    """Query the durable memory graph."""
+async def search(
+    inp: MemSearchIn, client: CogneeClient | None = None, *, root: str | None = None
+) -> MemSearchResult | MemError:
+    """Query the durable memory graph, scoped to the repo's dataset by default.
+
+    ``inp.dataset`` wins when given; otherwise the query resolves to the onboarded project
+    dataset via :func:`resolve_dataset`, so reads and writes agree on scope. Naming another
+    dataset explicitly is the way to reach a different project.
+    """
+    dataset = inp.dataset or resolve_dataset(root)
     try:
         results = await _client(client).search(
-            inp.query, inp.search_type, inp.dataset, inp.top_k, node_name=inp.node_name
+            inp.query, inp.search_type, dataset, inp.top_k, node_name=inp.node_name
         )
     except CogneeError as exc:
         return _error(exc)
-    return MemSearchResult(results=results, search_type=inp.search_type, dataset=inp.dataset)
+    return MemSearchResult(results=results, search_type=inp.search_type, dataset=dataset)
 
 
 async def rules(
@@ -117,10 +125,12 @@ async def rules(
     top_k: int = 10,
     dataset: str | None = None,
     client: CogneeClient | None = None,
+    *,
+    root: str | None = None,
 ) -> MemSearchResult | MemError:
     """Retrieve coding rules distilled into the graph (thin CODING_RULES search)."""
     inp = MemSearchIn(query=query, search_type="CODING_RULES", top_k=top_k, dataset=dataset)
-    return await search(inp, client=client)
+    return await search(inp, client=client, root=root)
 
 
 async def remember(
@@ -160,8 +170,13 @@ def _estimate(items: list[str]) -> MemIngestEstimate:
     )
 
 
-async def ingest(inp: MemIngestIn, client: CogneeClient | None = None) -> MemIngestResult | MemError:
+async def ingest(
+    inp: MemIngestIn, client: CogneeClient | None = None, *, root: str | None = None
+) -> MemIngestResult | MemError:
     """Bulk-ingest curated items with a cost pre-flight and serial-first cognify.
+
+    ``inp.dataset`` wins when given; otherwise it resolves to the repo's onboarded dataset
+    (:func:`resolve_dataset`), so curated docs land in the same project scope as captures.
 
     The first document on a *fresh* dataset is cognified alone and awaited
     (``dataPerBatch=1, chunksPerBatch=1``) — dodging the CREATE TABLE graph_node pg_type
@@ -169,9 +184,10 @@ async def ingest(inp: MemIngestIn, client: CogneeClient | None = None) -> MemIng
     """
     if not inp.items:
         return MemError(error="no items to ingest")
+    dataset = inp.dataset or resolve_dataset(root)
     estimate = _estimate(inp.items)
     if inp.dry_run:
-        return MemIngestResult(dataset=inp.dataset, estimate=estimate, dry_run=True)
+        return MemIngestResult(dataset=dataset, estimate=estimate, dry_run=True)
     limit = float(os.environ.get(_COST_LIMIT_ENV, _DEFAULT_COST_LIMIT_USD))
     if estimate.estimated_cost_usd > limit and not inp.confirm:
         return MemError(
@@ -181,11 +197,11 @@ async def ingest(inp: MemIngestIn, client: CogneeClient | None = None) -> MemIng
         )
     c = _client(client)
     try:
-        fresh = await _ship(c, inp.items, inp.dataset, inp.node_set, inp.ontology_key)
+        fresh = await _ship(c, inp.items, dataset, inp.node_set, inp.ontology_key)
     except CogneeError as exc:
         return _error(exc, estimate=estimate)
     return MemIngestResult(
-        dataset=inp.dataset,
+        dataset=dataset,
         estimate=estimate,
         ingested=len(inp.items),
         fresh_dataset=fresh,
@@ -340,7 +356,7 @@ async def ontology(inp: MemOntologyIn, client: CogneeClient | None = None) -> Me
 
 async def migrate_serena_memories(
     root: str,
-    dataset: str = DEFAULT_DATASET,
+    dataset: str | None = None,
     *,
     dry_run: bool = False,
     confirm: bool = False,
@@ -351,8 +367,10 @@ async def migrate_serena_memories(
     The retirement move for Serena's memory tools — after this, cognee is the only durable
     memory surface (Serena keeps reading its own files internally for the onboarding gate,
     they just stop being an agent-facing store). Tagged ``project_docs`` plus a per-repo
-    tag so the notes stay filterable by origin.
+    tag so the notes stay filterable by origin. ``dataset=None`` resolves to the repo's
+    onboarded dataset (:func:`resolve_dataset`) so the docs land in the project scope.
     """
+    dataset = dataset or resolve_dataset(root)
     rootp = Path(root).resolve()
     mem_dir = rootp / ".serena" / "memories"
     files = sorted(p for p in mem_dir.glob("*.md")) if mem_dir.is_dir() else []
