@@ -143,6 +143,12 @@ class FakeCognee:
             dataset_id, data_id = m.group(1), m.group(2)
             self.data_items[dataset_id] = [d for d in self.data_items.get(dataset_id, []) if d.get("id") != data_id]
             return httpx.Response(200, json={"status": "ok"})
+        if (m := re.fullmatch(r"/api/v1/datasets/([^/]+)", path)) and request.method == "DELETE":
+            self._record(request, {})
+            by_id = {f"id-{n}": n for n in self.datasets}
+            if (name := by_id.get(m.group(1))) is not None:
+                self.datasets.remove(name)
+            return httpx.Response(200, json={"status": "ok"})
         if m := re.fullmatch(r"/api/v1/activity/export/([^/]+)", path):
             self._record(request, {})
             if self.exports_raw:

@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from repo_agent_harness import paths
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -33,7 +35,8 @@ IDEMPOTENT_ATTEMPTS = 3
 RETRY_BACKOFF_S = 0.5
 
 NOT_CONFIGURED_HINT = (
-    "set COGNEE_BASE_URL plus COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD (or COGNEE_API_KEY) in the environment"
+    "set COGNEE_BASE_URL plus COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD (or COGNEE_API_KEY) in the environment, "
+    "or run `repo-agent-harness cognee-local up` to bring up a local instance"
 )
 
 
@@ -62,17 +65,50 @@ class CogneeAuthError(CogneeError):
     """Raised when login fails or a refreshed token is still rejected."""
 
 
-def base_url() -> str | None:
-    """The remote cognee root URL from COGNEE_BASE_URL, or None when unset."""
+def _remote_base_url() -> str | None:
+    """The *remote* cognee root URL from COGNEE_BASE_URL, or None when unset."""
     raw = (os.environ.get("COGNEE_BASE_URL") or "").strip()
     return raw.rstrip("/") or None
 
 
+def _local_endpoint() -> dict | None:
+    """The local-cognee endpoint descriptor (base_url + creds), or None.
+
+    Read on the hook hot path via ``configured``, so it must be cheap and fail closed: a
+    missing or garbage file — or one without a base_url — yields None, never an exception.
+    """
+    try:
+        with paths.cognee_endpoint_file().open(encoding="utf-8") as f:
+            data = _json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("base_url") else None
+
+
+def base_url() -> str | None:
+    """The cognee root URL: a configured remote (COGNEE_BASE_URL) wins, else a local instance."""
+    remote = _remote_base_url()
+    if remote:
+        return remote
+    url = (_local_endpoint() or {}).get("base_url")
+    return str(url).rstrip("/") if url else None
+
+
 def credentials() -> tuple[str, str] | None:
-    """(email, password) for the form login; supports both env spellings in the wild."""
+    """(email, password) for the form login; env spellings win, else the local endpoint's.
+
+    The local endpoint is consulted only when no remote is configured, so a remote user's
+    behavior is byte-for-byte unchanged.
+    """
     email = (os.environ.get("COGNEE_USER_EMAIL") or os.environ.get("COGNEE_USERNAME") or "").strip()
     password = os.environ.get("COGNEE_USER_PASSWORD") or os.environ.get("COGNEE_PASSWORD") or ""
-    return (email, password) if email and password else None
+    if email and password:
+        return (email, password)
+    if not _remote_base_url():
+        ep = _local_endpoint()
+        if ep and ep.get("email") and ep.get("password"):
+            return (str(ep["email"]), str(ep["password"]))
+    return None
 
 
 def api_key() -> str | None:
@@ -425,6 +461,13 @@ class CogneeClient:
     async def delete_data(self, dataset_id: str, data_id: str) -> Json:
         """DELETE /api/v1/datasets/{dataset_id}/data/{data_id} — remove one data item (write)."""
         return await self.request("DELETE", f"/api/v1/datasets/{dataset_id}/data/{data_id}")
+
+    async def delete_dataset(self, dataset_id: str) -> Json:
+        """DELETE /api/v1/datasets/{dataset_id} — remove a whole dataset (write, single attempt).
+
+        Used to tear down disposable eval datasets so recall evals never pollute real memory.
+        """
+        return await self.request("DELETE", f"/api/v1/datasets/{dataset_id}")
 
     async def improve(
         self,

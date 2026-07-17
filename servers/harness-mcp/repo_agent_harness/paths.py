@@ -130,6 +130,15 @@ def cognee_onboarded_file(root: str) -> Path:
     return repo_state_dir(root) / COGNEE_ONBOARDED_FILE
 
 
+def cognee_endpoint_file() -> Path:
+    """Path to the local-cognee endpoint descriptor (base_url + creds), host-level not per-repo.
+
+    Pure path (no I/O): read on the hook hot path via ``cognee_client.configured``, so it must
+    not touch the filesystem. The writer (``cognee_local``) creates the parent dir.
+    """
+    return harness_home() / "cognee" / "endpoint.json"
+
+
 def is_cognee_onboarded(root: str) -> bool:
     """True iff the marker exists and parses as JSON; fail-closed to False on any error."""
     try:

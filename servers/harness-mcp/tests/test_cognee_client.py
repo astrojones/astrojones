@@ -142,6 +142,77 @@ def test_env_resolution(monkeypatch):
     assert cognee_client.credentials() == ("d@e.f", "pw2")
 
 
+# -------------------------------------------------- local-cognee fallback resolution
+
+
+def _write_endpoint(tmp_path, monkeypatch, **fields):
+    import json
+
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path))
+    ep = tmp_path / "cognee" / "endpoint.json"
+    ep.parent.mkdir(parents=True, exist_ok=True)
+    ep.write_text(json.dumps(fields), encoding="utf-8")
+
+
+def test_base_url_prefers_remote_over_local(tmp_path, monkeypatch):
+    """A configured remote always wins; the local endpoint file is never consulted for it."""
+    _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="h@l.io", password="pw")
+    monkeypatch.setenv("COGNEE_BASE_URL", "https://remote.example/")
+    assert cognee_client.base_url() == "https://remote.example"
+
+
+def test_base_url_falls_back_to_local(tmp_path, monkeypatch):
+    """No remote -> the local endpoint file's base_url is used."""
+    monkeypatch.delenv("COGNEE_BASE_URL", raising=False)
+    _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="h@l.io", password="pw")
+    assert cognee_client.base_url() == "http://127.0.0.1:8765"
+
+
+def test_credentials_use_local_when_no_remote(tmp_path, monkeypatch):
+    """No remote and no env creds -> the local endpoint file's email/password."""
+    for v in ("COGNEE_BASE_URL", "COGNEE_USER_EMAIL", "COGNEE_USER_PASSWORD", "COGNEE_USERNAME", "COGNEE_PASSWORD"):
+        monkeypatch.delenv(v, raising=False)
+    _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="h@l.io", password="pw")
+    assert cognee_client.credentials() == ("h@l.io", "pw")
+
+
+def test_credentials_env_wins_over_local(tmp_path, monkeypatch):
+    """Env creds (remote user) always win over the local endpoint file."""
+    _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="local@l.io", password="localpw")
+    monkeypatch.setenv("COGNEE_BASE_URL", "https://remote.example")
+    monkeypatch.setenv("COGNEE_USER_EMAIL", "env@e.io")
+    monkeypatch.setenv("COGNEE_USER_PASSWORD", "envpw")
+    assert cognee_client.credentials() == ("env@e.io", "envpw")
+
+
+def test_garbage_endpoint_is_ignored(tmp_path, monkeypatch):
+    """A missing/garbage endpoint file fails closed to no local endpoint (hot-path safe)."""
+    monkeypatch.delenv("COGNEE_BASE_URL", raising=False)
+    monkeypatch.setenv("REPO_AGENT_HARNESS_HOME", str(tmp_path))
+    ep = tmp_path / "cognee" / "endpoint.json"
+    ep.parent.mkdir(parents=True, exist_ok=True)
+    ep.write_text("{not json", encoding="utf-8")
+    assert cognee_client.base_url() is None
+
+
+def test_configured_true_for_local_only(tmp_path, monkeypatch):
+    """With only a local endpoint file, the client is configured (flips capture + recall on)."""
+    for v in ("COGNEE_BASE_URL", "COGNEE_API_KEY", "COGNEE_USER_EMAIL", "COGNEE_USER_PASSWORD", "COGNEE_USERNAME", "COGNEE_PASSWORD"):
+        monkeypatch.delenv(v, raising=False)
+    _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="h@l.io", password="pw")
+    assert CogneeClient().configured is True
+
+
+async def test_delete_dataset_issues_delete():
+    """delete_dataset(id) is a single-attempt DELETE of the whole dataset (eval teardown)."""
+    fake = FakeCognee(datasets=["ds"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.delete_dataset("id-ds")
+    method, _, _ = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/datasets/id-ds")
+    assert method == "DELETE"
+    await client.aclose()
+
+
 # ------------------------------------------------------------------ tier-1 wrappers
 
 
