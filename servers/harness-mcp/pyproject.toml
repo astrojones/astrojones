@@ -28,6 +28,7 @@ dependencies = [
     "tree-sitter>=0.23,<0.26",  # 0.26 ABI-breaks the language-pack wheels: garbage spans/segfaults on deep walks
     "tree-sitter-language-pack>=0.13",
     "claude-agent-sdk>=0.2.120",
+    "sqlmodel>=0.0.39",
 ]
 
 [project.scripts]
@@ -169,6 +170,9 @@ max-nested-blocks = 5
 ]
 # CLI subcommands dispatch through many lambdas; the function is unavoidably long.
 "repo_agent_harness/cli.py" = ["PLR0915", "S404", "S607"]
+# SyncLedger.record() takes the six columns of one ledger row (kind, source_id, content_hash,
+# dataset, verify_status, shipped_at) — an honest 1:1 with the table, not a refactorable clump.
+"repo_agent_harness/sync_ledger.py" = ["PLR0913", "PLR0917"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
