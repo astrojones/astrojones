@@ -139,6 +139,16 @@ def cognee_endpoint_file() -> Path:
     return harness_home() / "cognee" / "endpoint.json"
 
 
+def sync_ledger_file() -> Path:
+    """Path to OUR claude-mem->cognee sync ledger DB, host-level not per-repo.
+
+    Pure path (no I/O), the writable sibling of ``cognee_endpoint_file`` — it must not touch
+    the filesystem so callers on the hook hot path can resolve it cheaply. The ledger itself
+    (``sync_ledger``) creates the parent dir on first write.
+    """
+    return harness_home() / "cognee" / "sync_ledger.db"
+
+
 def is_cognee_onboarded(root: str) -> bool:
     """True iff the marker exists and parses as JSON; fail-closed to False on any error."""
     try:
