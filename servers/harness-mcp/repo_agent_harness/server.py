@@ -34,6 +34,7 @@ from repo_agent_harness import (
     capture,
     cognee_client,
     cognee_local,
+    cognee_sync,
     context,
     deploy,
     drift,
@@ -120,11 +121,12 @@ class _Drain:
         await _cancel(self._task)
 
 
-async def _bring_up_local(drain: _Drain) -> None:
-    """Best-effort background bring-up of local cognee; rebuild the client and start the drain.
+async def _bring_up_local(sync: cognee_sync.CogneeSync) -> None:
+    """Best-effort background bring-up of local cognee; rebuild the client and start the sync loop.
 
-    Never blocks startup: cold boot can take ~15s plus a one-time image pull. The capture queue
-    is durable, so hooks firing before the backend answers lose nothing — the drain catches up.
+    Never blocks startup: cold boot can take ~15s plus a one-time image pull. The claude-mem
+    store is read past a durable watermark, so anything written before the backend answers is
+    picked up on the next sync cycle — nothing is lost.
     """
     base = await asyncio.to_thread(_ensure_local_if_enabled)
     if not base:
@@ -132,7 +134,7 @@ async def _bring_up_local(drain: _Drain) -> None:
     cognee_client.reset_client()
     rebuilt = cognee_client.get_client()
     if rebuilt.configured:
-        drain.start(rebuilt)
+        sync.start(rebuilt)
 
 
 @asynccontextmanager
@@ -175,15 +177,15 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     # does not pay the full cold-boot (spawn + LSP start) cost while the UI waits.
     warm_task = _serena.warm() if root else None
     perception_task = asyncio.create_task(perception_daemon.run()) if perception_daemon else None
-    # Capture drain: ship hook-enqueued rows to cognee in-process. Only when configured — a
-    # remote now, or a local container once it is up. Local auto-start is opt-in
+    # Memory sync: mirror the read-only claude-mem store into cognee in-process. Only when
+    # configured — a remote now, or a local container once it is up. Local auto-start is opt-in
     # (COGNEE_LOCAL_ENABLE=1); by default the server never boots local unprompted, so a machine
     # with a remote it merely failed to inherit can't spin up a split-brain second store.
     cognee = cognee_client.get_client()
-    drain = _Drain(root)
+    sync = cognee_sync.CogneeSync(root)
     if cognee.configured:
-        drain.start(cognee)
-    local_task = asyncio.create_task(_bring_up_local(drain)) if root and not cognee.configured else None
+        sync.start(cognee)
+    local_task = asyncio.create_task(_bring_up_local(sync)) if root and not cognee.configured else None
     try:
         yield {}
     finally:
@@ -195,7 +197,7 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
             repo_watcher.stop()
         await _cancel(watch_task)
         await _cancel(local_task)
-        await drain.stop()
+        await sync.stop()
         with suppress(RuntimeError):  # defensive: the child dies with our stdio anyway
             await _serena.aclose()
 
