@@ -1,6 +1,6 @@
 {
   "enabledPlugins": {
-    "astrojones@astrojones": false
+    "astrojones@astrojones": true
   },
   "extraKnownMarketplaces": {
     "astrojones": {
