@@ -339,3 +339,75 @@ async def test_export_markdown_handles_raw_markdown_body():
     client = CogneeClient(**fake.client_kwargs())
     assert await client.export_markdown("id-kolbe") == "# kolbe activity\n- added"
     await client.aclose()
+
+
+# --------------------------------------------- coexistence memory-API wrappers (P2)
+
+
+async def test_remember_posts_multipart_and_omits_node_set_when_none():
+    """remember() POSTs /api/v1/remember multipart; node_set omitted when None, present when given."""
+    fake = FakeCognee(datasets=["cm_astrojones"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.remember(["doc one"], "cm_astrojones", None)
+    method, path, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/remember")
+    assert (method, path) == ("POST", "/api/v1/remember")
+    assert payload["data"] == "doc one"
+    assert payload["datasetName"] == "cm_astrojones"
+    assert "node_set" not in payload
+    await client.remember(["doc two"], "cm_astrojones", ["claude_mem_mirror"])
+    payload = [pl for _, p, pl in fake.requests if p == "/api/v1/remember"][-1]
+    assert payload["node_set"] == "claude_mem_mirror"
+    await client.aclose()
+
+
+async def test_recall_posts_pinned_only_context_body():
+    """recall() sends the camelCase onlyContext/topK body with datasets pinned and scope listed."""
+    fake = FakeCognee(datasets=["cm_astrojones"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.recall("what did we decide", ["cm_astrojones"])
+    method, path, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/recall")
+    assert (method, path) == ("POST", "/api/v1/recall")
+    assert payload == {
+        "query": "what did we decide",
+        "datasets": ["cm_astrojones"],
+        "scope": ["graph"],
+        "onlyContext": True,
+        "topK": 5,
+    }
+    await client.aclose()
+
+
+async def test_recall_requires_datasets():
+    """An unpinned recall (empty datasets) raises before any network call — no login, no request."""
+    fake = FakeCognee()
+    client = CogneeClient(**fake.client_kwargs())
+    with pytest.raises(ValueError, match="datasets"):
+        await client.recall("q", [])
+    assert not fake.requests
+    await client.aclose()
+
+
+async def test_forget_posts_dataset_body():
+    """forget() is a single-attempt POST /api/v1/forget carrying the {dataset} body."""
+    fake = FakeCognee(datasets=["cm_astrojones"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.forget("cm_astrojones")
+    method, path, payload = next((m, p, pl) for m, p, pl in fake.requests if p == "/api/v1/forget")
+    assert (method, path) == ("POST", "/api/v1/forget")
+    assert payload == {"dataset": "cm_astrojones"}
+    await client.aclose()
+
+
+async def test_cognify_status_scopes_pipeline_param_only_when_given():
+    """cognify_status polls datasets/status; the pipeline param appears only when passed."""
+    fake = FakeCognee(datasets=["kolbe"])
+    client = CogneeClient(**fake.client_kwargs())
+    await client.cognify_status("id-kolbe")
+    params = [pl for _, p, pl in fake.requests if p == "/api/v1/datasets/status"][-1]
+    assert params["dataset"] == "id-kolbe"
+    assert "pipeline" not in params
+    await client.cognify_status("id-kolbe", pipeline="cognify_pipeline")
+    params = [pl for _, p, pl in fake.requests if p == "/api/v1/datasets/status"][-1]
+    assert params["dataset"] == "id-kolbe"
+    assert params["pipeline"] == "cognify_pipeline"
+    await client.aclose()

@@ -219,7 +219,7 @@ class CogneeCircuit:
             self._opened_at = self._clock()
 
 
-class CogneeClient:
+class CogneeClient:  # noqa: PLR0904 - one thin async method per cognee endpoint; a transport client is meant to be wide
     """Thin async HTTP client with auth, circuit breaking, and idempotent-only retries.
 
     All parameters default from the environment; ``transport`` is injectable for tests
@@ -529,6 +529,80 @@ class CogneeClient:
             if isinstance(parsed, str):
                 return parsed
         return text
+
+    # ----------------------------------------- coexistence memory-API wrappers (P2)
+
+    async def remember(
+        self,
+        items: list[str],
+        dataset: str,
+        node_set: list[str] | None,
+        *,
+        run_in_background: bool = True,
+    ) -> Json:
+        """POST /api/v1/remember (multipart) — the memory-API twin of :meth:`add`.
+
+        Byte-for-byte the same multipart body as ``add`` (text items become in-memory .txt
+        uploads; ``node_set`` omitted when falsy), only the endpoint differs. Single-attempt
+        write like ``add`` — a blind /remember retry could double-write.
+        """
+        fields: dict[str, str | list[str]] = {
+            "datasetName": dataset,
+            "run_in_background": "true" if run_in_background else "false",
+        }
+        if node_set:
+            fields["node_set"] = list(node_set)  # list value -> repeated multipart field
+        files = [("data", (f"item-{i}.txt", text.encode("utf-8"), "text/plain")) for i, text in enumerate(items)]
+        return await self.request("POST", "/api/v1/remember", data=fields, files=files)
+
+    async def recall(
+        self,
+        query: str,
+        datasets: list[str],
+        *,
+        scope: tuple[str, ...] = ("graph",),
+        only_context: bool = True,
+        top_k: int = 5,
+    ) -> Json:
+        """POST /api/v1/recall (camelCase payload per the probe-captured body).
+
+        ``datasets`` is mandatory: an unpinned recall spans every dataset the server hosts and
+        drags in junk from unrelated demo corpora (mirrors :meth:`search`'s guard). ``onlyContext``
+        is the probe-validated junk-free mode — no server-side completion LLM in the hot path.
+        Single attempt (no retries) keeps recall latency bounded.
+        """
+        if not datasets:
+            msg = "recall requires datasets — an unpinned recall spans every dataset on the server"
+            raise ValueError(msg)
+        payload: dict[str, Json] = {
+            "query": query,
+            "datasets": list(datasets),
+            "scope": list(scope),
+            "onlyContext": only_context,
+            "topK": top_k,
+        }
+        return await self.request("POST", "/api/v1/recall", json=payload)
+
+    async def forget(self, dataset: str) -> Json:
+        """POST /api/v1/forget — remove a whole dataset by name (write, single attempt).
+
+        The ``{"dataset": dataset}`` body shape is asserted from the coexistence contract, NOT
+        live-verified (the validation report never executed forget) — FLAG for later live
+        confirmation against the deployment.
+        """
+        return await self.request("POST", "/api/v1/forget", json={"dataset": dataset})
+
+    async def cognify_status(self, dataset_id: str, *, pipeline: str | None = None) -> Json:
+        """GET /api/v1/datasets/status scoped to a pipeline — an idempotent poll (:meth:`dataset_status` twin).
+
+        Thin wrapper over the same status endpoint; ``pipeline`` is appended only when truthy
+        (falsy-omission idiom). NOTE: the ``pipeline`` query-param NAME is not confirmed against
+        the live cognee OpenAPI — FLAG for later verification.
+        """
+        params: dict[str, list[str] | str] = {"dataset": [dataset_id]}
+        if pipeline:
+            params["pipeline"] = pipeline
+        return await self.request("GET", "/api/v1/datasets/status", params=params, idempotent=True)
 
 
 # One shared client per process, mirroring the `_serena` gateway singleton in server.py:
