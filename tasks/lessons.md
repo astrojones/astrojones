@@ -1,4 +1,8 @@
 
+## 2026-07-18 — SSH-Alias + Dev-Target
+- Für jonaheidsick.de/nuroot-prod immer `ssh jhj` verwenden (User-Korrektur; nicht `jh`, nicht Raw-IP — Raw-IP wird zudem vom Permission-Classifier geblockt).
+- Entwickeln/Testen der cognee-Memory-Fixes gegen das LOKALE Repo + lokalen cognee-Container (`cognee_local.py`), nicht gegen bartix.de. Prod nur für Deploy + Verify-Probes.
+
 ## 2026-07-17 — „Flag weglassen" ≠ „lädt nichts": Digest-Self-Feed kam zurück
 - Der 07-13-Fix stützte sich auf eine Annahme: `ClaudeAgentSdkProvider` OHNE `setting_sources` lade „keine Hooks". Falsch für claude-code 2.1.211 / SDK 0.2.120: bei weggelassenem `setting_sources` sendet das SDK gar kein `--setting-sources`, und die CLI lädt dann ihren EIGENEN user+project-Default (also Hooks) → Stop-Hook re-enqueued → ~1730 Digest-Prozesse in Minuten, Quota verbrannt.
 - Regel: Annahmen über „lädt nichts" NIE aus einer Doku ableiten — gegen die installierte SDK-Version verifizieren (`inspect.getsource` auf den subprocess-Transport: wie mappt die Option auf CLI-Flags?). Leere Liste `setting_sources=[]` → `--setting-sources=` → lädt nichts; das ist der Unterschied zu None.
