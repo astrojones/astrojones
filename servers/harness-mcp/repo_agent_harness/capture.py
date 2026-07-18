@@ -20,6 +20,7 @@ import functools
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from typing import TYPE_CHECKING
@@ -51,6 +52,18 @@ _MAX_QUEUE_ROWS = 10_000
 # provider in a tight loop. At 50 rows/batch the cap still allows ~1000 legit rows/minute.
 _MIN_DRAIN_INTERVAL_S = 1.0
 _MAX_DRAINS_PER_MINUTE = 20
+
+# Empty-chunk guard. cognee's per-chunk summarizer HALLUCINATES fabricated facts when a doc has
+# nothing to summarize: instructor forces a non-empty summary field, so a contentless chunk
+# ("ok") comes back with invented content (a doc of literally "ok" produced a summary about
+# "Mary Anning's fossil discoveries" — verified against the live gemini config). Calibration on
+# that config found a sharp cliff: zero content words hallucinates, but a SINGLE real token
+# anchors the model and it stays faithful (even a trivial "a JSON object was stopped"). So drop
+# only docs with zero content words at the ship boundary — the one chokepoint before add+cognify.
+# "Content words" are runs of >=3 letters, which ignores the ISO timestamp and pure-punctuation
+# payloads; every real observation and rendered entry clears a bar of one.
+_MIN_CONTENT_WORDS = 1
+_CONTENT_WORD = re.compile(r"[A-Za-z]{3,}")
 
 
 def queue_db(root: str) -> Path:
@@ -200,9 +213,13 @@ class BrainCapture:
         from repo_agent_harness import mem  # noqa: PLC0415 - lazy: drain runs in-server; keep the hook path light
 
         dataset = mem.resolve_dataset(self.root)
-        for node_set, docs in self._ship_groups(result, entries):
+        groups = self._ship_groups(result, entries)
+        for node_set, docs in groups:
             await self._client.add(docs, dataset, node_set, run_in_background=False)
-        await self._client.cognify(dataset, run_in_background=True)
+        # Skip cognify when the guard dropped every doc: no new nodes means nothing to summarize,
+        # so a background cognify would be pure LLM cost. Rows are still deleted below.
+        if groups:
+            await self._client.cognify(dataset, run_in_background=True)
         # No memify: its default pass only re-embeds graph triplets into the Triplet_text
         # vector collection, which recall never reads — recall is CHUNKS over
         # DocumentChunk_text scoped to session_digest. In the API mode this harness uses,
@@ -219,20 +236,36 @@ class BrainCapture:
     ) -> list[tuple[list[str], list[str]]]:
         """(node_set, docs) batches: observations grouped per tag combination, else one plain doc.
 
-        Every branch fails open to shipping something — a digest outcome never loses rows.
+        Each branch fails open to shipping something, except that the empty-chunk guard
+        (:meth:`_is_summarizable`) drops docs too thin to summarize — a branch whose docs are all
+        sub-threshold ships nothing rather than feed the summarizer a hallucination trigger.
         """
         if result is not None and result.observations:
             observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             groups: dict[tuple[str, ...], list[str]] = {}
             for obs in result.observations:
+                doc = BrainCapture._observation_doc(obs, observed_at)
+                if not BrainCapture._is_summarizable(doc):
+                    continue
                 # sorted() canonicalizes the group key: identical concept sets in different
                 # order must batch together instead of splitting into separate add() calls.
                 node_set = (*CAPTURE_NODE_SET, f"type:{obs.type}", *(f"concept:{c}" for c in sorted(obs.concepts)))
-                groups.setdefault(node_set, []).append(BrainCapture._observation_doc(obs, observed_at))
+                groups.setdefault(node_set, []).append(doc)
             return [(list(tags), docs) for tags, docs in groups.items()]
         if result is not None and result.text:
-            return [(CAPTURE_NODE_SET, [result.text])]
-        return [(CAPTURE_NODE_SET, entries)]
+            return [(CAPTURE_NODE_SET, [result.text])] if BrainCapture._is_summarizable(result.text) else []
+        kept = [e for e in entries if BrainCapture._is_summarizable(e)]
+        return [(CAPTURE_NODE_SET, kept)] if kept else []
+
+    @staticmethod
+    def _is_summarizable(doc: str) -> bool:
+        """True when a doc carries enough content to summarize without hallucination.
+
+        See the ``_MIN_CONTENT_WORDS`` guard: cognee's summarizer invents facts to fill
+        instructor's required field when a chunk is near-empty, so contentless docs are dropped
+        before they ever reach ``add``/``cognify``.
+        """
+        return len(_CONTENT_WORD.findall(doc)) >= _MIN_CONTENT_WORDS
 
     @staticmethod
     def _observation_doc(obs: digest_providers.DigestObservation, observed_at: str) -> str:
