@@ -119,12 +119,10 @@ def test_stamp_hook_heartbeat_accepts_job_names(tmp_path):
     assert "memify" in paths.read_hook_heartbeats(root)
 
 
-def test_hook_events_lists_the_six_wired_events():
+def test_hook_events_lists_the_four_wired_events():
     assert paths.HOOK_EVENTS == (
         "pre-tool-use",
         "post-tool-use",
         "user-prompt-submit",
         "session-start",
-        "stop",
-        "pre-compact",
     )

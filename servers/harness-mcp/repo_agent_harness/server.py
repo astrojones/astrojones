@@ -31,7 +31,6 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit(msg) from exc
 
 from repo_agent_harness import (
-    capture,
     cognee_client,
     cognee_local,
     cognee_sync,
@@ -91,34 +90,6 @@ def _ensure_local_if_enabled() -> str | None:
     # Generous budget: the first-ever boot on a fresh volume runs alembic migrations and can far
     # exceed a normal restart. This runs in a background thread, so waiting costs nothing.
     return cognee_local.ensure_local(300.0)
-
-
-class _Drain:
-    """Owns the capture-drain task so it can be started at boot OR once local cognee comes up.
-
-    A remote-configured server starts it immediately; a local-fallback server starts it from the
-    background ``_bring_up_local`` task the moment the container answers. Idempotent: a second
-    ``start`` (e.g. remote already running) is a no-op.
-    """
-
-    def __init__(self, root: str | None) -> None:
-        """Bind the worktree root; the drain only ever runs inside a repo."""
-        self._root = root
-        self._brain: capture.BrainCapture | None = None
-        self._task: asyncio.Task | None = None
-
-    def start(self, client: cognee_client.CogneeClient) -> None:
-        """Start the drain against ``client`` unless there is no repo or one is already running."""
-        if self._root is None or self._brain is not None:
-            return
-        self._brain = capture.BrainCapture(self._root, client)
-        self._task = asyncio.create_task(self._brain.run())
-
-    async def stop(self) -> None:
-        """Signal the drain to stop and await its exit (no-op when it never started)."""
-        if self._brain is not None:
-            self._brain.stop()
-        await _cancel(self._task)
 
 
 async def _bring_up_local(sync: cognee_sync.CogneeSync) -> None:

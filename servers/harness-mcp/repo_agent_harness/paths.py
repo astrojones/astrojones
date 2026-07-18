@@ -61,8 +61,6 @@ HOOK_EVENTS = (
     "post-tool-use",
     "user-prompt-submit",
     "session-start",
-    "stop",
-    "pre-compact",
 )
 
 

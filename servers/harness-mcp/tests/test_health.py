@@ -198,16 +198,16 @@ def test_health_lists_all_hook_events_with_never_explicit(repo, isolated_harness
 
 
 def test_health_hook_heartbeat_reflects_stamp_and_job(repo, isolated_harness_home):
-    paths.stamp_hook_heartbeat(str(repo), "stop")
+    paths.stamp_hook_heartbeat(str(repo), "post-tool-use")
     paths.stamp_hook_heartbeat(str(repo), "memify")  # async jobs ride along in the same list
     _write_config(repo, CHEAP_CONFIG, isolated_harness_home)
     snap = health.run(str(repo))
     beats = {b.event: b for b in snap.hook_heartbeats}
     assert set(paths.HOOK_EVENTS) <= set(beats)
-    assert beats["stop"].last_success_at is not None
-    assert beats["stop"].age_s is not None
-    assert beats["stop"].age_s >= 0
-    assert beats["stop"].count >= 1
+    assert beats["post-tool-use"].last_success_at is not None
+    assert beats["post-tool-use"].age_s is not None
+    assert beats["post-tool-use"].age_s >= 0
+    assert beats["post-tool-use"].count >= 1
     assert beats["memify"].last_success_at is not None
     assert beats["pre-tool-use"].last_success_at is None  # never ran stays explicit
     assert snap.ok is True

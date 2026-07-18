@@ -8,8 +8,8 @@ process, NO agent runtime — the only things it touches are the cognee HTTP cli
 read-only claude-mem reader, our writable :class:`SyncLedger`, and path helpers. That is
 invariant I2: nothing on this call path may reach an LLM or a spawned process.
 
-Lifecycle mirrors :class:`server._Drain` (``start(client)`` / ``stop()``) so the ``_lifespan``
-swap is a one-liner. Per-repo scoped by ``root`` — one repo's claude-mem project into that
+Lifecycle is the standard ``start(client)`` / ``stop()`` task shape, so the ``_lifespan``
+wiring is a one-liner. Per-repo scoped by ``root`` — one repo's claude-mem project into that
 repo's ``cm_<project>`` dataset, never a global all-projects sweep.
 
 Contract with :class:`SyncLedger` (see its ``watermark`` docstring): ship rows strictly in

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from repo_agent_harness import (
     agent_hooks,
-    claude_mem_migrate,
     cognee_local,
     context,
     deploy,
@@ -200,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sp.add_argument(
         "event",
-        choices=["pre-tool-use", "post-tool-use", "user-prompt-submit", "session-start", "stop", "pre-compact"],
+        choices=["pre-tool-use", "post-tool-use", "user-prompt-submit", "session-start"],
     )
     sp = sub.add_parser(
         "serena-daemon",
@@ -223,21 +222,6 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--dataset", default=None, help="Target dataset (default: the repo's onboarded dataset)")
     sp.add_argument("--dry-run", action="store_true", help="Only report files and cost estimate")
     sp.add_argument("--confirm", action="store_true", help="Accept an over-limit estimated cost")
-    sp = sub.add_parser(
-        "migrate-claude-mem",
-        parents=[common],
-        help="One-shot, resumable import of the frozen claude-mem store into cognee (dry-run unless --confirm)",
-    )
-    sp.add_argument("--db", default=None, help="Path to claude-mem.db (default ~/.claude-mem/claude-mem.db)")
-    sp.add_argument("--dataset", required=True, help="Target cognee dataset name")
-    sp.add_argument("--node-set", action="append", default=None, help="Extra node_set tag (repeatable)")
-    sp.add_argument("--project", action="append", default=None, help="Only this claude-mem project (repeatable)")
-    sp.add_argument("--types", action="append", default=None, help="Only this observation type (repeatable)")
-    sp.add_argument("--since", default=None, help="Only rows observed at/after this ISO-8601 date or epoch")
-    sp.add_argument("--until", default=None, help="Only rows observed at/before this ISO-8601 date or epoch")
-    sp.add_argument("--granularity", choices=list(claude_mem_migrate.GRANULARITIES), default="summaries-only")
-    sp.add_argument("--dry-run", action="store_true", help="Only report the plan (the default unless --confirm)")
-    sp.add_argument("--confirm", action="store_true", help="Actually ship; without it the run stays a dry-run")
     sp = sub.add_parser(
         "memify",
         parents=[common],
@@ -319,21 +303,6 @@ def main(argv: list[str] | None = None) -> int:
         "gateway-snapshot": lambda: gateway.generate_snapshot(root),
         "migrate-serena-memories": lambda: asyncio.run(
             mem.migrate_serena_memories(root, args.dataset, dry_run=args.dry_run, confirm=args.confirm)
-        ).model_dump(exclude_none=True),
-        # dry-run wins over confirm on purpose: passing both flags stays a report, never a write
-        "migrate-claude-mem": lambda: asyncio.run(
-            claude_mem_migrate.migrate(
-                args.db,
-                args.dataset,
-                node_set=args.node_set,
-                projects=args.project,
-                types=args.types,
-                since=args.since,
-                until=args.until,
-                granularity=args.granularity,
-                dry_run=args.dry_run or not args.confirm,
-                confirm=args.confirm,
-            )
         ).model_dump(exclude_none=True),
         "memify": lambda: {
             "ok": asyncio.run(mem.run_memify(root, args.dataset)),

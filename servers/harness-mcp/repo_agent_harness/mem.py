@@ -44,12 +44,11 @@ from repo_agent_harness.models import (
 
 DEFAULT_DATASET = "agent_sessions"
 
-# Naming conventions table — the SSOT for every write path. capture, migrate, and
-# onboarding all write against these names; no writer picks a dataset or node_set tag
-# ad hoc (colon tags like "type:decision" persist server-side via belongs_to_set).
+# Naming conventions table — the SSOT for every write path. The sync loop and onboarding
+# write against these names; no writer picks a dataset or node_set tag ad hoc (colon tags
+# like "type:decision" persist server-side via belongs_to_set).
 NODE_SET_PROJECT_DOCS = "project_docs"
 NODE_SET_SESSION_DIGEST = "session_digest"
-NODE_SET_CLAUDE_MEM_IMPORT = "claude_mem_import"
 NODE_SET_CODE_MAP = "code_map"
 TYPE_TAG_PREFIX = "type:"
 CONCEPT_TAG_PREFIX = "concept:"
@@ -79,9 +78,10 @@ _COST_LIMIT_ENV = "COGNEE_INGEST_COST_LIMIT_USD"
 _DEFAULT_USD_PER_MTOK = 5.0
 _DEFAULT_COST_LIMIT_USD = 1.0
 
-# Sentinels for competing capture pipelines (mem_doctor): if these are live, memory is
-# being double-written by a plugin that should have been disabled in the cutover.
-_CLAUDE_MEM_DB = Path("~/.claude-mem/claude-mem.db")
+# Sentinel for a competing capture pipeline (mem_doctor): if the cognee-memory plugin is
+# live, memory is being double-written by a plugin that should have been disabled in the
+# cutover. (claude-mem itself is now the expected upstream — CogneeSync mirrors it — so a
+# live claude-mem store is no longer a fault and is not sentinelled here.)
 _COGNEE_PLUGIN_DIR = Path("~/.cognee-plugin")
 _SENTINEL_RECENT_S = 600
 
@@ -395,21 +395,13 @@ async def migrate_serena_memories(
 
 
 def _capture_sentinels() -> list[str]:
-    """Detect live competing capture pipelines (claude-mem / cognee-memory plugin).
+    """Detect a live competing capture pipeline (the cognee-memory plugin).
 
-    Both sentinels are recency-gated: they warn only when a pipeline wrote within
-    _SENTINEL_RECENT_S, so stale residue from a since-disabled plugin never false-alarms.
+    Recency-gated: warns only when the plugin wrote within _SENTINEL_RECENT_S, so stale
+    residue from a since-disabled plugin never false-alarms. (claude-mem is the sanctioned
+    upstream now, mirrored by CogneeSync, so it is intentionally not sentinelled here.)
     """
     hints: list[str] = []
-    db = _CLAUDE_MEM_DB.expanduser()
-    try:
-        if db.exists() and time.time() - db.stat().st_mtime < _SENTINEL_RECENT_S:
-            hints.append(
-                "claude-mem capture looks LIVE (~/.claude-mem/claude-mem.db written recently) — "
-                "disable it or memory is double-written"
-            )
-    except OSError:
-        pass
     plugin_dir = _COGNEE_PLUGIN_DIR.expanduser()
     try:
         if plugin_dir.is_dir():
@@ -431,29 +423,25 @@ def _capture_sentinels() -> list[str]:
     return hints
 
 
-# Mirrors agent_hooks' session-start degradation window: "older than the last session-start"
-# alone would fire on turn 1 of every session (stop legitimately stamps before session-start).
-_HEARTBEAT_STALE_S = 7 * 86_400
+# The CogneeSync loop stamps the "cm-sync" heartbeat every cycle (60s cadence), before its
+# breaker check — so a present-but-stale beat means the mirror loop itself stopped making
+# forward progress. 15 min is generous headroom over the cadence without masking a real stall.
+_SYNC_HEARTBEAT_STALE_S = 15 * 60
 
 
 def _heartbeat_hints(root: str | None) -> list[str]:
-    """The stop-hook staleness hint: session captures drain on Stop, so a dead Stop hook loses them.
+    """The cognee-sync staleness hint: a stalled mirror loop stops shipping claude-mem into cognee.
 
-    Exactly one hint, and only when the hooks are demonstrably wired (session-start has
-    stamped) yet stop never stamped — or last stamped before the latest session-start AND
-    longer than the staleness window ago (recency vetoes the first-turn false positive).
-    Fail-open: no root or unreadable heartbeats simply skip the check.
+    Exactly one hint, and only when the "cm-sync" heartbeat is present but stale (older than
+    _SYNC_HEARTBEAT_STALE_S). An absent beat means sync was never configured/started — not a
+    fault — so it stays silent. Fail-open: no root or unreadable heartbeats simply skip the check.
     """
     if not root:
         return []
     beats = paths.read_hook_heartbeats(root)
-    start = beats.get("session-start")
-    if not start or start.get("count", 0) <= 0:
-        return []
-    stop = beats.get("stop")
-    stale = stop is not None and stop["ts"] < start["ts"] and time.time() - stop["ts"] > _HEARTBEAT_STALE_S
-    if stop is None or stale:
-        return ["stop hook heartbeat never/stale — session captures may not be enqueued"]
+    sync = beats.get("cm-sync")
+    if sync is not None and time.time() - sync["ts"] > _SYNC_HEARTBEAT_STALE_S:
+        return ["cognee sync loop heartbeat stale (>15m) — claude-mem→cognee mirror may be stalled"]
     return []
 
 
@@ -468,7 +456,7 @@ def _secrets_hints(root: str | None) -> list[str]:
 async def doctor(client: CogneeClient | None = None, root: str | None = None) -> MemDoctorResult:
     """Checkable health: reachability, auth, competing-capture and heartbeat sentinels.
 
-    ``root`` (optional, wired by the server) enables the per-repo stop-heartbeat and
+    ``root`` (optional, wired by the server) enables the per-repo cm-sync-heartbeat and
     secrets.yml checks; without it doctor reports exactly what it always did.
     """
     c = _client(client)
@@ -476,7 +464,7 @@ async def doctor(client: CogneeClient | None = None, root: str | None = None) ->
     if not c.configured:
         out.hints.append(NOT_CONFIGURED_HINT)
         out.hints.extend(_capture_sentinels())
-        # A dead stop hook loses local captures regardless of cognee configuration.
+        # A stalled cognee-sync loop stops mirroring claude-mem regardless of cognee config.
         out.hints.extend(_heartbeat_hints(root))
         out.hints.extend(_secrets_hints(root))
         return out
