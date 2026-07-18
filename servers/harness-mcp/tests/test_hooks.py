@@ -3,7 +3,19 @@
 import io
 import json
 
+import pytest
 from repo_agent_harness import agent_hooks, cli
+
+
+@pytest.fixture(autouse=True)
+def _enable_cm_recall(monkeypatch):
+    """Enable the opt-in SessionStart cognee recall for these hook tests.
+
+    Recall is gated behind COGNEE_CM_RECALL (default off); enabling it here lets the recall
+    paths (present + failure-mode) exercise real behavior. The default-off gate has its own
+    dedicated test that unsets it.
+    """
+    monkeypatch.setenv("COGNEE_CM_RECALL", "1")
 
 
 def _run(payload, repo, monkeypatch, capsys, raw=None, event="pre-tool-use"):
@@ -199,6 +211,18 @@ def test_session_start_injects_recall(repo, monkeypatch):
     payload = _recall_search_payload(fake)
     assert payload["searchType"] == "CHUNKS"
     assert payload["nodeName"] == ["session_digest"]
+
+
+def test_session_start_recall_gated_off_by_default(repo, monkeypatch):
+    """COGNEE_CM_RECALL unset (the default) -> no cognee recall injected, even when configured."""
+    from tests.fake_cognee import FakeCognee
+
+    monkeypatch.delenv("COGNEE_CM_RECALL", raising=False)
+    monkeypatch.chdir(repo)
+    fake = FakeCognee(datasets=["agent_sessions"])
+    out = agent_hooks.session_start({}, client=_wired_client(fake))
+    assert "Durable-memory recall" not in _ctx(out)
+    assert _recall_search_payload(fake) is None  # the gate short-circuits before any query
 
 
 def _recall_search_payload(fake):

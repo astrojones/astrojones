@@ -218,6 +218,11 @@ _RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
 # vector search; 8s leaves headroom over the observed ~3-4s cold path.
 _RECALL_TIMEOUT_S = 8.0
 _RECALL_TOP_K = 5
+# Opt-in gate for the injected SessionStart cognee recall. Default OFF: CogneeSync still
+# mirrors claude-mem -> cognee, but nothing cognee-derived enters session context until this
+# is set, pending the Phase-6 measurement of whether cognee recall beats claude-mem's own
+# SessionStart window. Truthy values: 1/true/yes/on.
+_RECALL_FLAG_ENV = "COGNEE_CM_RECALL"
 # A GRAPH_COMPLETION answer is one synthesized paragraph, not a short chunk — keep it whole
 # (the section as a whole is still budgeted to 9000 chars in session_start).
 _RECALL_LINE_CHARS = 1200
@@ -323,9 +328,13 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     stored "Got it."), whereas scoping to ``session_digest`` returns only distilled digests.
     Filtering verified against the live pgvector deployment.
 
+    Gated behind ``COGNEE_CM_RECALL`` (default off): returns ``None`` immediately unless the
+    flag is set, so cognee-derived text stays out of session context until opted in. Also
     ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
     the caller simply omits the section rather than aborting session start.
     """
+    if (os.environ.get(_RECALL_FLAG_ENV) or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None  # opt-in: cognee recall stays out of injected context until enabled
     import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
 
     try:
