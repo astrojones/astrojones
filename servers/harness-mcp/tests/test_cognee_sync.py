@@ -59,7 +59,7 @@ async def test_cycle_ships_then_verifies_then_records_ok(tmp_path):
     seq = [path for _m, path, _p in fake.requests if path in {"/api/v1/remember", "/api/v1/datasets/status"}]
     assert seq[:2] == ["/api/v1/remember", "/api/v1/datasets/status"]
     # a verified-ok ledger row (advancing the watermark) lands only after BOTH succeeded
-    assert ledger.watermark("obs") == 1
+    assert ledger.watermark("obs", "cm_myrepo") == 1
 
 
 async def test_cycle_replay_dedup_skips_already_ok(tmp_path):
@@ -94,7 +94,7 @@ async def test_failed_cycle_leaves_watermark_unmoved(tmp_path):
     await sync._cycle()
 
     assert any(path == "/api/v1/remember" for _m, path, _p in fake.requests)  # it did try
-    assert ledger.watermark("obs") == 0  # ...but nothing verified ok -> watermark unmoved
+    assert ledger.watermark("obs", "cm_myrepo") == 0  # ...but nothing verified ok -> watermark unmoved
 
 
 # ------------------------------------------------------------------ breaker

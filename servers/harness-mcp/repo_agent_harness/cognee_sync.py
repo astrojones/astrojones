@@ -217,11 +217,11 @@ class CogneeSync:
         """
         assert self._ledger is not None  # noqa: S101 - _bind ran before any cycle
         reader = claude_mem_reader.read_observations if kind == "obs" else claude_mem_reader.read_summaries
-        watermark = self._ledger.watermark(kind)
+        watermark = self._ledger.watermark(kind, self._dataset)
         docs = await asyncio.to_thread(reader, self._db, self._project, watermark)
         batch: list[MemDoc] = []
         for doc in docs:
-            if self._ledger.already_ok(doc.content_hash):
+            if self._ledger.already_ok(doc.content_hash, self._dataset):
                 continue  # replay dedup: an identical doc already verified ok, skip re-shipping
             batch.append(doc)
             if len(batch) >= _BATCH_SIZE:
