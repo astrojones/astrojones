@@ -427,6 +427,59 @@ def test_next_delay_cap_window_slides(tmp_path, monkeypatch):
     assert brain._next_delay(50) == pytest.approx(1.0)  # window cleared → floor again
 
 
+def test_is_summarizable_drops_only_zero_content_docs():
+    """Empty-chunk guard (calibrated): 0 content words hallucinates and is dropped; >=1 passes.
+
+    Live calibration on the gemini config showed the cliff is at zero — a single real token keeps
+    the summarizer faithful — so the guard blocks only genuinely contentless docs.
+    """
+    S = capture.BrainCapture._is_summarizable
+    # Dropped: no run of >=3 letters (the proven hallucination trigger and its kin).
+    assert S("ok") is False
+    assert S("   ") is False
+    assert S("") is False
+    assert S('{"a": 1}') is False
+    # Kept: at least one content word anchors the summary.
+    assert S('[2026-07-18T00:00:00Z] stop: {"a": 1}') is True  # "stop"
+    assert S("Migrated the auth router to cookie-only sessions") is True
+
+
+def test_ship_groups_drops_contentless_text_digest():
+    """A contentless plaintext digest ships nothing rather than a hallucination trigger."""
+    assert capture.BrainCapture._ship_groups(digest_providers.DigestResult(text="ok"), []) == []
+    kept = capture.BrainCapture._ship_groups(
+        digest_providers.DigestResult(text="Migrated the auth router to cookie-only sessions"), []
+    )
+    assert kept == [(capture.CAPTURE_NODE_SET, ["Migrated the auth router to cookie-only sessions"])]
+
+
+def test_ship_groups_filters_contentless_entries():
+    """Raw-entry fallback drops the contentless entries and keeps the substantive ones."""
+    entries = ["ok", "42 / 7", '[2026-07-18T00:00:00Z] edit: routers/auth.py rewritten']
+    groups = capture.BrainCapture._ship_groups(None, entries)
+    assert len(groups) == 1
+    assert groups[0][1] == ['[2026-07-18T00:00:00Z] edit: routers/auth.py rewritten']
+
+
+def test_ship_groups_all_contentless_ships_nothing():
+    """Every branch empties out to no groups when nothing is summarizable."""
+    assert capture.BrainCapture._ship_groups(None, ["ok", "  "]) == []
+    assert capture.BrainCapture._ship_groups(digest_providers.DigestResult(text="  "), []) == []
+
+
+async def test_drain_skips_add_and_cognify_when_all_contentless(tmp_path, monkeypatch):
+    """A batch digesting to only contentless docs ships nothing, skips cognify, still drains rows."""
+    root = str(tmp_path)
+    capture.enqueue(root, "stop", {"a": 1})
+    _digest_returning(monkeypatch, digest_providers.DigestResult(text="ok"))
+    fake = FakeCognee(datasets=[capture.CAPTURE_DATASET])
+    brain = capture.BrainCapture(root, _wired(fake))
+    assert await brain._drain_once() == 1  # row consumed, not stuck
+    assert not any(path == "/api/v1/add" for _, path, _ in fake.requests)
+    assert not any(path == "/api/v1/cognify" for _, path, _ in fake.requests)
+    assert capture.pending_count(root) == 0
+
+
 def test_ship_groups_canonicalizes_concept_order():
     """Same concept set in different order must land in ONE batch (sorted group key)."""
     obs_a = digest_providers.DigestObservation(
