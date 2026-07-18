@@ -274,10 +274,32 @@ def test_status_reports_state(monkeypatch):
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
     out = cognee_local.status()
     assert out["state"] == "running"
     assert out["healthy"] is True
     assert out["image"] == cognee_local.image()
+
+
+def test_container_embedding_key_present_maps_exit_codes(monkeypatch):
+    """The container probe maps docker exit codes to present/absent/unknown (value never captured)."""
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=0))
+    assert cognee_local.container_embedding_key_present("c") is True
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=1))
+    assert cognee_local.container_embedding_key_present("c") is False
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=1, stderr="boom"))
+    assert cognee_local.container_embedding_key_present("c") is None
+
+
+def test_status_embedding_key_reads_running_container_not_shell(monkeypatch):
+    """Reports the RUNNING container's key state, not the invoking shell's env (Phase 7 fix)."""
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    monkeypatch.setattr(cognee_local, "openrouter_key", lambda: None)  # this shell carries no key
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
+    monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=0))
+    assert cognee_local.status()["embedding_key_present"] is True
 
 
 def test_stop_down_nuke_issue_docker_verbs_embedded(monkeypatch):
@@ -444,6 +466,7 @@ def test_status_reports_postgres_block(monkeypatch):
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
     monkeypatch.setattr(cognee_local, "pg_ready", lambda name, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
     out = cognee_local.status()
     assert out["backend"] == "postgres"
     assert out["postgres"]["container"] == cognee_local.pg_container_name()
@@ -455,6 +478,7 @@ def test_status_no_postgres_block_under_embedded(monkeypatch):
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
     out = cognee_local.status()
     assert out["backend"] == "embedded"
     assert "postgres" not in out

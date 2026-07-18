@@ -192,6 +192,23 @@ def openrouter_key() -> str | None:
     return None
 
 
+def container_embedding_key_present(name: str) -> bool | None:
+    """Whether the RUNNING container actually has a non-empty embedding/LLM key baked in.
+
+    ``status`` runs from any shell — often without the env file ``up`` loaded — so the invoking
+    shell's env (:func:`openrouter_key`) is the wrong source of truth once the container is up.
+    Ask the container itself, presence-only: ``test -n`` never echoes the secret value (the key is
+    forwarded in but never read back out). Returns None when the container can't be probed (not
+    running / docker error) so the caller falls back to the shell-env guess.
+    """
+    probe = _docker(["exec", name, "sh", "-c", 'test -n "$EMBEDDING_API_KEY" || test -n "$LLM_API_KEY"'])
+    if probe.returncode == 0:
+        return True
+    if probe.returncode == 1 and not (probe.stderr or "").strip():
+        return False  # reachable container, keys genuinely absent
+    return None  # not running / docker error -> unknown, let the caller fall back
+
+
 def enabled() -> bool:
     """Whether the server should AUTO-START local cognee at boot (opt-in).
 
@@ -607,6 +624,9 @@ def status() -> dict:
     name = container_name()
     state = container_state(name) if have_docker else "docker-unavailable"
     base = local_base_url()
+    # Once the container is up it holds whatever key `up` baked in — ask it, not this shell (which
+    # may lack the env file `up` loaded). Fall back to the shell-env guess when it isn't running.
+    container_key = container_embedding_key_present(name) if state == "running" else None
     out = {
         "ok": True,
         "enabled": enabled(),
@@ -618,7 +638,7 @@ def status() -> dict:
         "endpoint": read_endpoint(),
         "image": image(),
         "volume": volume_name(),
-        "embedding_key_present": openrouter_key() is not None,
+        "embedding_key_present": container_key if container_key is not None else (openrouter_key() is not None),
     }
     if uses_postgres():
         pg = pg_container_name()
