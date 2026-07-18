@@ -9,6 +9,7 @@ monkeypatching those seams and pointing ``REPO_AGENT_HARNESS_HOME`` at a tmp dir
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from repo_agent_harness import cognee_local
@@ -74,6 +75,19 @@ def test_docker_run_args_recipe():
     assert f"{cognee_local.volume_name()}:/data" in args
     assert args[-1] == cognee_local.image()
     assert "--restart" in args and "unless-stopped" in args
+
+
+def test_docker_run_args_mounts_summarize_prompt_when_vendored():
+    assert cognee_local._SUMMARIZE_PROMPT_FILE.is_file()  # vendored from astrojones/cognee
+    args = cognee_local.docker_run_args("me@example.com", "pw123")
+    mount = f"{cognee_local._SUMMARIZE_PROMPT_FILE}:{cognee_local._SUMMARIZE_PROMPT_CONTAINER_PATH}:ro"
+    assert mount in args
+
+
+def test_docker_run_args_skips_prompt_mount_when_file_absent(monkeypatch):
+    monkeypatch.setattr(cognee_local, "_SUMMARIZE_PROMPT_FILE", Path("/nonexistent/prompt.txt"))
+    args = cognee_local.docker_run_args("me@example.com", "pw123")
+    assert not any("summarize" in a for a in args)
 
 
 def test_container_env_mirrors_remote_embedding():

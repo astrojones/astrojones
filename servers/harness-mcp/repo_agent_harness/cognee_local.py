@@ -18,6 +18,14 @@ one embedding space — data is interchangeable, and recall works the moment an 
 present in the environment. The key is passed through from the environment at ``docker run``
 time and never persisted in ``endpoint.json``.
 
+The image tag and the summarize-prompt override are also kept in lockstep with the remote
+deployment (astrojones/cognee, ``docker-compose.yml``) by hand — bump ``_DEFAULT_IMAGE`` and
+re-copy ``cognee_local_summarize_prompt.txt`` from that repo's ``prompts/summarize_content.txt``
+whenever the remote changes either. The prompt override exists because cognee's stock summarizer
+invents facts to fill a required field when a chunk has no substantive content — read-only
+bind-mounted over the in-image prompt so an empty/near-empty chunk (e.g. a fresh "Got it."-style
+digest) can't get hallucinated into a fabricated recall result.
+
 State lives in the named Docker volume (SQLite + LanceDB + Kuzu); the container is disposable.
 ``endpoint.json`` (mode 0600) is the SSOT that lets both the long-lived MCP server and the
 short-lived hook subprocesses resolve the same local endpoint; like ``serena/daemon.json`` it is
@@ -34,6 +42,7 @@ import secrets
 import shutil
 import subprocess  # noqa: S404 - fixed-argv docker CLI calls only, no shell, no user input
 import time
+from pathlib import Path
 
 import httpx
 
@@ -45,8 +54,13 @@ IN_CONTAINER_PORT = 8000  # cognee's fixed internal HTTP port
 _DEFAULT_CONTAINER = "astrojones-cognee"
 _DEFAULT_VOLUME = "astrojones-cognee-data"
 _DEFAULT_PORT = 8765
-_DEFAULT_IMAGE = "cognee/cognee:main"  # cognee publishes no per-version image tags; :main is it
+_DEFAULT_IMAGE = "cognee/cognee:1.4.0"  # pinned, mirrors astrojones/cognee docker-compose.yml
 _DEFAULT_EMAIL = "harness@example.com"  # must be a valid email format (cognee validates it)
+
+# Anti-hallucination summarize-prompt override, vendored from astrojones/cognee's
+# prompts/summarize_content.txt (see docker-compose.yml there for the remote's matching mount).
+_SUMMARIZE_PROMPT_FILE = Path(__file__).parent / "cognee_local_summarize_prompt.txt"
+_SUMMARIZE_PROMPT_CONTAINER_PATH = "/app/cognee/infrastructure/llm/prompts/summarize_content.txt"
 
 # Embedding + LLM config, mirroring the remote deployment so local and remote share one vector
 # space. The embedder is the same everywhere on purpose (vectors are model/dimension-specific).
@@ -252,7 +266,10 @@ def docker_run_args(email: str, password: str) -> list[str]:
     """The full ``docker run`` argv (after ``docker``) for a fresh local container.
 
     Loopback-only publish (never expose memory on the LAN), one named volume for all state,
-    ``--restart unless-stopped`` so Docker rewarms it across host reboots.
+    ``--restart unless-stopped`` so Docker rewarms it across host reboots. The summarize-prompt
+    override is bind-mounted read-only when the vendored copy is present (never a hard
+    requirement — an absent file just means the stock in-image prompt is used, same as before
+    this override existed).
     """
     args = [
         "run",
@@ -266,6 +283,8 @@ def docker_run_args(email: str, password: str) -> list[str]:
         "-v",
         f"{volume_name()}:/data",
     ]
+    if _SUMMARIZE_PROMPT_FILE.is_file():
+        args += ["-v", f"{_SUMMARIZE_PROMPT_FILE}:{_SUMMARIZE_PROMPT_CONTAINER_PATH}:ro"]
     for key, value in container_env(email, password).items():
         args += ["-e", f"{key}={value}"]
     args.append(image())
