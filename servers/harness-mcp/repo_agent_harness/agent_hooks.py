@@ -171,7 +171,6 @@ def post_tool_use(data: dict, root: str | None = None) -> dict:
     path = tin.get("file_path") or tin.get("path") or tin.get("notebook_path") or ""
     if repo and path:
         _record_touched(repo, path)
-        _capture(repo, "post_tool_use", {"tool_name": data.get("tool_name", ""), "path": path})
     snapshot = _read_json(paths.perception_file(repo)) if repo else None
     if not isinstance(snapshot, dict):
         return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": _VERIFY_NUDGE}}
@@ -211,39 +210,6 @@ def user_prompt_submit(data: dict, root: str | None = None) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": digest[:9000]}}
 
 
-def _capture(repo: str, event: str, payload: dict) -> None:
-    """Enqueue a capture row (local sqlite only — never a network call from a hook path).
-
-    Skipped entirely when cognee is unconfigured, so setups without a memory backend never
-    accumulate a queue nobody will ever drain. The gate is ``cognee_client.is_configured()``
-    — the same env-or-local-endpoint resolution the drain and recall use — so a configured
-    local instance captures too. (The old raw COGNEE_BASE_URL check gave local mode a live
-    reader and a dead writer: R2.)
-    """
-    with suppress(Exception):  # fail-open: capture must never block or break a turn
-        from repo_agent_harness import capture, cognee_client  # noqa: PLC0415 - lazy, keeps the hot path light
-
-        if not cognee_client.is_configured():
-            return
-        capture.enqueue(repo, event, payload)
-
-
-def stop(data: dict, root: str | None = None) -> dict:
-    """Stop hook: enqueue-only (zero synchronous HTTP); the server-side drain ships it later."""
-    repo = root or git.repo_root()
-    if repo:
-        _capture(repo, "stop", data)
-    return {}
-
-
-def pre_compact(data: dict, root: str | None = None) -> dict:
-    """PreCompact hook: enqueue-only (zero synchronous HTTP) — capture before context is squashed."""
-    repo = root or git.repo_root()
-    if repo:
-        _capture(repo, "pre_compact", data)
-    return {}
-
-
 # SessionStart recall: the ONE hook allowed a network call, bounded and fail-open. Every
 # other hook stays enqueue-only/local by hard rule — a turn must never block on cognee.
 _RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
@@ -252,6 +218,11 @@ _RECALL_TIMEOUT_ENV = "REPO_AGENT_HARNESS_RECALL_TIMEOUT_S"
 # vector search; 8s leaves headroom over the observed ~3-4s cold path.
 _RECALL_TIMEOUT_S = 8.0
 _RECALL_TOP_K = 5
+# Opt-in gate for the injected SessionStart cognee recall. Default OFF: CogneeSync still
+# mirrors claude-mem -> cognee, but nothing cognee-derived enters session context until this
+# is set, pending the Phase-6 measurement of whether cognee recall beats claude-mem's own
+# SessionStart window. Truthy values: 1/true/yes/on.
+_RECALL_FLAG_ENV = "COGNEE_CM_RECALL"
 # A GRAPH_COMPLETION answer is one synthesized paragraph, not a short chunk — keep it whole
 # (the section as a whole is still budgeted to 9000 chars in session_start).
 _RECALL_LINE_CHARS = 1200
@@ -357,9 +328,13 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     stored "Got it."), whereas scoping to ``session_digest`` returns only distilled digests.
     Filtering verified against the live pgvector deployment.
 
+    Gated behind ``COGNEE_CM_RECALL`` (default off): returns ``None`` immediately unless the
+    flag is set, so cognee-derived text stays out of session context until opted in. Also
     ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
     the caller simply omits the section rather than aborting session start.
     """
+    if (os.environ.get(_RECALL_FLAG_ENV) or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None  # opt-in: cognee recall stays out of injected context until enabled
     import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
 
     try:
@@ -390,10 +365,9 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
 
 
 # Hook-degradation warning (session_start section [0b]). Warn only for the events whose
-# silent death actually degrades a session; pre-compact fires too rarely to judge and
-# session-start is the one running right now. Thresholds are hardcoded by design — this is
-# a tripwire, not a tunable.
-_HEARTBEAT_WARN_EVENTS = ("pre-tool-use", "post-tool-use", "user-prompt-submit", "stop")
+# silent death actually degrades a session; session-start is the one running right now.
+# Thresholds are hardcoded by design — this is a tripwire, not a tunable.
+_HEARTBEAT_WARN_EVENTS = ("pre-tool-use", "post-tool-use", "user-prompt-submit")
 _HEARTBEAT_MIN_SESSIONS = 3  # fresh install: too little history to tell "dead" from "new"
 _HEARTBEAT_STALE_S = 7 * 24 * 3600
 
@@ -470,8 +444,6 @@ _HANDLERS = {
     "post-tool-use": post_tool_use,
     "user-prompt-submit": user_prompt_submit,
     "session-start": session_start,
-    "stop": stop,
-    "pre-compact": pre_compact,
 }
 
 

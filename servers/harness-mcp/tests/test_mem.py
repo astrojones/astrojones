@@ -1,7 +1,6 @@
 """mem_* business logic: contracts, cost pre-flight, serial-first cognify, doctor sentinels."""
 
 import json
-import os
 import time
 
 import pytest
@@ -376,21 +375,6 @@ async def test_doctor_unreachable_server_is_reported_not_raised():
     assert any("health probe failed" in h for h in out.hints)
 
 
-async def test_doctor_detects_live_claude_mem_capture(tmp_path, monkeypatch):
-    fake = FakeCognee(datasets=["kolbe"])
-    db = tmp_path / ".claude-mem" / "claude-mem.db"
-    db.parent.mkdir()
-    db.write_text("x")
-    monkeypatch.setattr(mem, "_CLAUDE_MEM_DB", db)
-    out = await mem.doctor(client=_wired(fake))
-    assert any("claude-mem capture looks LIVE" in h for h in out.hints)
-    # An old, quiet DB is not flagged.
-    old = time.time() - 3600
-    os.utime(db, (old, old))
-    out = await mem.doctor(client=_wired(fake))
-    assert not any("claude-mem" in h for h in out.hints)
-
-
 async def test_doctor_detects_pending_cognee_plugin_captures(tmp_path, monkeypatch):
     fake = FakeCognee(datasets=["kolbe"])
     pending = tmp_path / ".cognee-plugin" / "claude-code" / "pending"
@@ -401,50 +385,39 @@ async def test_doctor_detects_pending_cognee_plugin_captures(tmp_path, monkeypat
     assert any("cognee-memory plugin capture looks LIVE" in h for h in out.hints)
 
 
-async def test_doctor_flags_never_or_stale_stop_heartbeat(tmp_path):
-    """Exactly one hint when session-start ran but stop never/last stamped before it."""
+async def test_doctor_flags_stale_cm_sync_heartbeat(tmp_path):
+    """Exactly one hint when the cm-sync mirror beat is present but stale; silent otherwise."""
     root = tmp_path / "repo"
     root.mkdir()
     fake = FakeCognee(datasets=["kolbe"])
-    hint = "stop hook heartbeat never/stale"
+    hint = "cognee sync loop heartbeat stale"
 
     def beat(event: str, ts: float) -> None:
         paths.hook_heartbeat_file(str(root), event).write_text(json.dumps({"ts": ts, "count": 1}))
 
-    # No heartbeats at all: hooks may simply not be installed — not this hint's business.
+    # No cm-sync beat at all: sync was never configured/started -> not a fault.
     out = await mem.doctor(client=_wired(fake), root=str(root))
     assert not any(hint in h for h in out.hints)
-    # session-start ran but stop NEVER did -> captures may never be enqueued.
-    beat("session-start", 200.0)
-    out = await mem.doctor(client=_wired(fake), root=str(root))
-    assert sum(hint in h for h in out.hints) == 1
-    # stop is STALE (older than the last session-start) -> the same single hint.
-    beat("stop", 100.0)
-    out = await mem.doctor(client=_wired(fake), root=str(root))
-    assert sum(hint in h for h in out.hints) == 1
-    # Fresh stop (after the last session-start) -> healthy, no hint.
-    beat("stop", 300.0)
+    # A fresh cm-sync beat -> the loop is making forward progress, no hint.
+    beat("cm-sync", time.time())
     out = await mem.doctor(client=_wired(fake), root=str(root))
     assert not any(hint in h for h in out.hints)
-    # No root (today's server wiring) -> the check is silently skipped.
+    # A stale cm-sync beat (older than the 15m window) -> exactly one hint.
+    beat("cm-sync", time.time() - 20 * 60)
+    out = await mem.doctor(client=_wired(fake), root=str(root))
+    assert sum(hint in h for h in out.hints) == 1
+    # No root (server not wired for the per-repo check) -> silently skipped.
     out = await mem.doctor(client=_wired(fake))
-    assert not any(hint in h for h in out.hints)
-    # FIRST TURN of a new session: stop stamped seconds before this session-start
-    # (healthy end of the previous session) — recency must veto the staleness hint.
-    now = time.time()
-    beat("stop", now - 60)
-    beat("session-start", now)
-    out = await mem.doctor(client=_wired(fake), root=str(root))
     assert not any(hint in h for h in out.hints)
 
 
 async def test_doctor_heartbeat_hint_fires_without_cognee_configured(tmp_path):
-    """A dead stop hook loses local captures regardless of cognee config — hint fires unconfigured too."""
+    """A stalled cm-sync loop stops the claude-mem mirror regardless of cognee config."""
     root = tmp_path / "repo"
     root.mkdir()
-    paths.hook_heartbeat_file(str(root), "session-start").write_text(json.dumps({"ts": time.time(), "count": 3}))
+    paths.hook_heartbeat_file(str(root), "cm-sync").write_text(json.dumps({"ts": time.time() - 20 * 60, "count": 3}))
     out = await mem.doctor(client=_unconfigured(), root=str(root))
-    assert any("stop hook heartbeat never/stale" in h for h in out.hints)
+    assert any("cognee sync loop heartbeat stale" in h for h in out.hints)
 
 
 async def test_doctor_hints_malformed_secrets_yml(tmp_path, isolated_harness_home):
@@ -514,10 +487,9 @@ async def test_migrate_serena_memories_dry_run_and_empty_dir(tmp_path):
 
 
 def test_conventions_table_values():
-    """The SSOT constants every write path (capture/migrate/onboard) must use verbatim."""
+    """The SSOT constants every write path (sync loop / onboarding) must use verbatim."""
     assert mem.NODE_SET_PROJECT_DOCS == "project_docs"
     assert mem.NODE_SET_SESSION_DIGEST == "session_digest"
-    assert mem.NODE_SET_CLAUDE_MEM_IMPORT == "claude_mem_import"
     assert mem.NODE_SET_CODE_MAP == "code_map"
     assert mem.TYPE_TAG_PREFIX == "type:"
     assert mem.CONCEPT_TAG_PREFIX == "concept:"

@@ -28,6 +28,12 @@ def _isolated_home(tmp_path, monkeypatch):
         "COGNEE_LOCAL_VOLUME",
         "COGNEE_LOCAL_USER_EMAIL",
         "COGNEE_LOCAL_LLM_API_KEY",
+        "COGNEE_LOCAL_BACKEND",
+        "COGNEE_LOCAL_PG_CONTAINER",
+        "COGNEE_LOCAL_PG_VOLUME",
+        "COGNEE_LOCAL_PG_IMAGE",
+        "COGNEE_LOCAL_PG_PORT",
+        "COGNEE_LOCAL_NETWORK",
         "OPENROUTER_API_KEY",
         "LLM_API_KEY",
         "EMBEDDING_API_KEY",
@@ -166,6 +172,7 @@ def test_ensure_local_none_without_docker(monkeypatch):
 
 def test_ensure_local_reuses_running_healthy(monkeypatch):
     calls = []
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")  # cognee-container lifecycle in isolation
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
@@ -178,6 +185,7 @@ def test_ensure_local_reuses_running_healthy(monkeypatch):
 
 def test_ensure_local_cold_run_then_healthy(monkeypatch):
     ran = []
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
     monkeypatch.setattr(cognee_local, "image_present", lambda tag: True)
@@ -192,6 +200,7 @@ def test_ensure_local_cold_run_then_healthy(monkeypatch):
 
 def test_ensure_local_pulls_missing_image(monkeypatch):
     ran = []
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
     monkeypatch.setattr(cognee_local, "image_present", lambda tag: False)
@@ -204,6 +213,7 @@ def test_ensure_local_pulls_missing_image(monkeypatch):
 
 
 def test_ensure_local_race_name_in_use_still_polls(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
     monkeypatch.setattr(cognee_local, "image_present", lambda tag: True)
@@ -218,6 +228,7 @@ def test_ensure_local_race_name_in_use_still_polls(monkeypatch):
 
 
 def test_ensure_local_run_failure_returns_none(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
     monkeypatch.setattr(cognee_local, "image_present", lambda tag: True)
@@ -232,6 +243,7 @@ def test_ensure_local_persists_endpoint_before_health_poll(monkeypatch):
     comes up within budget=0. ensure_local returns None, yet endpoint.json must already carry the
     password so a later reuse can log in — otherwise the volume's user is unreachable forever.
     """
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
     monkeypatch.setattr(cognee_local, "image_present", lambda tag: True)
@@ -244,6 +256,7 @@ def test_ensure_local_persists_endpoint_before_health_poll(monkeypatch):
 
 def test_ensure_local_starts_exited_container(monkeypatch):
     ran = []
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "exited")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
@@ -257,22 +270,61 @@ def test_ensure_local_starts_exited_container(monkeypatch):
 
 
 def test_status_reports_state(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
     monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
     monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
     out = cognee_local.status()
     assert out["state"] == "running"
     assert out["healthy"] is True
     assert out["image"] == cognee_local.image()
 
 
-def test_stop_down_nuke_issue_docker_verbs(monkeypatch):
+def test_container_embedding_key_present_maps_exit_codes(monkeypatch):
+    """The container probe maps docker exit codes to present/absent/unknown (value never captured)."""
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=0))
+    assert cognee_local.container_embedding_key_present("c") is True
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=1))
+    assert cognee_local.container_embedding_key_present("c") is False
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=1, stderr="boom"))
+    assert cognee_local.container_embedding_key_present("c") is None
+
+
+def test_status_embedding_key_reads_running_container_not_shell(monkeypatch):
+    """Reports the RUNNING container's key state, not the invoking shell's env (Phase 7 fix)."""
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    monkeypatch.setattr(cognee_local, "openrouter_key", lambda: None)  # this shell carries no key
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
+    monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(returncode=0))
+    assert cognee_local.status()["embedding_key_present"] is True
+
+
+def test_stop_down_nuke_issue_docker_verbs_embedded(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
     seen = []
     monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: seen.append(args[0]) or _completed())
     cognee_local.stop()
     cognee_local.down()
     cognee_local.nuke()
-    assert seen == ["stop", "rm", "rm", "volume"]
+    assert seen == ["stop", "rm", "rm", "volume"]  # single container, single volume
+
+
+def test_stop_down_nuke_issue_docker_verbs_postgres(monkeypatch):
+    # Default backend (postgres): each verb also acts on the pg sidecar + shared network.
+    seen = []
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: seen.append(tuple(args)) or _completed())
+    cognee_local.stop()
+    cognee_local.down()
+    cognee_local.nuke()
+    pg = cognee_local.pg_container_name()
+    net = cognee_local.network_name()
+    assert ["stop", pg] in [list(a) for a in seen]  # sidecar stopped alongside cognee
+    assert ["rm", "-f", pg] in [list(a) for a in seen]  # sidecar removed on down/nuke
+    assert ["volume", "rm", cognee_local.pg_volume_name()] in [list(a) for a in seen]  # pg data destroyed on nuke
+    assert ["network", "rm", net] in [list(a) for a in seen]  # shared bridge torn down
 
 
 def test_down_clears_endpoint(monkeypatch):
@@ -280,3 +332,153 @@ def test_down_clears_endpoint(monkeypatch):
     monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed())
     cognee_local.down()
     assert cognee_local.read_endpoint() is None
+
+
+# --------------------------------------------------------------------------- pgvector backend
+
+
+def test_backend_default_is_postgres():
+    assert cognee_local.backend() == "postgres"
+    assert cognee_local.uses_postgres() is True
+
+
+def test_backend_embedded_opt_out(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    assert cognee_local.backend() == "embedded"
+    assert cognee_local.uses_postgres() is False
+
+
+def test_backend_typo_fails_safe_to_postgres(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "sqlite")  # anything != embedded → parity path
+    assert cognee_local.backend() == "postgres"
+
+
+def test_container_env_has_pg_wiring_under_postgres():
+    env = cognee_local.container_env("me@example.com", "pw")
+    assert env["DB_PROVIDER"] == "postgres"
+    assert env["VECTOR_DB_PROVIDER"] == "pgvector"
+    assert env["GRAPH_DATABASE_PROVIDER"] == "postgres"
+    # all three stores point at the one sidecar / one db, by network alias
+    for prefix in ("DB", "VECTOR_DB", "GRAPH_DATABASE"):
+        assert env[f"{prefix}_HOST"] == cognee_local.pg_container_name()
+        assert env[f"{prefix}_NAME"] == "cognee_db"
+        assert env[f"{prefix}_PORT"] == "5432"
+
+
+def test_container_env_no_pg_wiring_under_embedded(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    env = cognee_local.container_env("me@example.com", "pw")
+    assert "DB_PROVIDER" not in env
+    assert "VECTOR_DB_PROVIDER" not in env
+
+
+def test_docker_run_args_joins_network_under_postgres():
+    args = cognee_local.docker_run_args("me@example.com", "pw")
+    assert "--network" in args
+    assert cognee_local.network_name() in args
+    assert args[-1] == cognee_local.image()  # image still last
+
+
+def test_docker_run_args_no_network_under_embedded(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    args = cognee_local.docker_run_args("me@example.com", "pw")
+    assert "--network" not in args
+
+
+def test_pg_run_args_recipe():
+    args = cognee_local.pg_run_args()
+    assert args[:2] == ["run", "-d"]
+    assert "--name" in args and cognee_local.pg_container_name() in args
+    assert "--network" in args and cognee_local.network_name() in args
+    assert f"{cognee_local.pg_volume_name()}:/var/lib/postgresql/data" in args
+    assert "POSTGRES_DB=cognee_db" in args
+    assert "max_connections=300" in args and "shared_buffers=1GB" in args
+    assert not any(a.startswith("127.0.0.1:") for a in args)  # no host publish by default
+
+
+def test_pg_run_args_publishes_when_port_set(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_PG_PORT", "5433")
+    args = cognee_local.pg_run_args()
+    assert "-p" in args and "127.0.0.1:5433:5432" in args
+
+
+def test_ensure_network_reuses_existing(monkeypatch):
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: _completed(0))  # inspect ok
+    assert cognee_local.ensure_network() is True
+
+
+def test_ensure_network_creates_when_absent(monkeypatch):
+    calls = []
+
+    def fake(args, **k):
+        calls.append(args[:2])
+        return _completed(1) if args[:2] == ["network", "inspect"] else _completed(0)
+
+    monkeypatch.setattr(cognee_local, "_docker", fake)
+    assert cognee_local.ensure_network() is True
+    assert ["network", "create"] in calls
+
+
+def test_ensure_postgres_reuses_running_ready(monkeypatch):
+    monkeypatch.setattr(cognee_local, "ensure_network", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
+    monkeypatch.setattr(cognee_local, "pg_ready", lambda name, **k: True)
+    monkeypatch.setattr(cognee_local, "_docker", lambda *a, **k: pytest.fail("should not run docker on reuse"))
+    assert cognee_local.ensure_postgres() is True
+
+
+def test_ensure_postgres_cold_run_then_ready(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cognee_local, "ensure_network", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "absent")
+    monkeypatch.setattr(cognee_local, "image_present", lambda tag: True)
+    monkeypatch.setattr(cognee_local, "pg_ready", lambda name, **k: True)
+    monkeypatch.setattr(cognee_local, "_docker", lambda args, **k: ran.append(args[0]) or _completed())
+    assert cognee_local.ensure_postgres() is True
+    assert ran and ran[0] == "run"
+
+
+def test_ensure_postgres_false_when_network_fails(monkeypatch):
+    monkeypatch.setattr(cognee_local, "ensure_network", lambda: False)
+    assert cognee_local.ensure_postgres() is False
+
+
+def test_ensure_local_aborts_when_postgres_down(monkeypatch):
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "ensure_postgres", lambda *a, **k: False)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: pytest.fail("must not reach cognee boot"))
+    assert cognee_local.ensure_local() is None
+
+
+def test_ensure_local_ensures_postgres_first(monkeypatch):
+    order = []
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "ensure_postgres", lambda *a, **k: order.append("pg") or True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: order.append("cognee") or "running")
+    monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "_docker", lambda *a, **k: _completed())
+    cognee_local.ensure_local()
+    assert order[0] == "pg"  # sidecar readiness gates the cognee boot
+
+
+def test_status_reports_postgres_block(monkeypatch):
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
+    monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "pg_ready", lambda name, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
+    out = cognee_local.status()
+    assert out["backend"] == "postgres"
+    assert out["postgres"]["container"] == cognee_local.pg_container_name()
+    assert out["postgres"]["ready"] is True
+
+
+def test_status_no_postgres_block_under_embedded(monkeypatch):
+    monkeypatch.setenv("COGNEE_LOCAL_BACKEND", "embedded")
+    monkeypatch.setattr(cognee_local, "docker_available", lambda: True)
+    monkeypatch.setattr(cognee_local, "container_state", lambda name: "running")
+    monkeypatch.setattr(cognee_local, "health_ok", lambda base, **k: True)
+    monkeypatch.setattr(cognee_local, "container_embedding_key_present", lambda name: None)
+    out = cognee_local.status()
+    assert out["backend"] == "embedded"
+    assert "postgres" not in out

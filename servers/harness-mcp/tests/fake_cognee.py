@@ -1,9 +1,9 @@
 """A canned in-process cognee server for client/mem tests (httpx.MockTransport).
 
 The counterpart of ``fake_serena.py`` for the memory stack: no subprocess, no network —
-an httpx transport whose handler speaks just enough of the live API (login, datasets,
-search, add, cognify, ontologies, health) and records every request so tests can assert
-ordering (serial-first cognify) and payload shape. Failure knobs mirror fake_serena's
+an httpx transport whose handler speaks just enough of the live API (login, datasets, search,
+add, cognify, remember, recall, forget, ontologies, health) and records every request so tests
+can assert ordering (serial-first cognify) and payload shape. Failure knobs mirror fake_serena's
 canned/error/hang philosophy: expire tokens, fail transports, return 5xx.
 """
 
@@ -88,7 +88,7 @@ class FakeCognee:
             return httpx.Response(401, json={"detail": "Unauthorized"})
         return self._route_authed(request, path)
 
-    def _route_authed(self, request: httpx.Request, path: str) -> httpx.Response:  # noqa: PLR0911 - one return per route is the readable shape
+    def _route_authed(self, request: httpx.Request, path: str) -> httpx.Response:  # noqa: PLR0911, C901 - a flat per-route dispatch table; one return per route is the readable shape
         tier1 = self._route_tier1(request, path)
         if tier1 is not None:
             return tier1
@@ -111,6 +111,16 @@ class FakeCognee:
         if path == "/api/v1/add":
             return self._add(request)
         if path == "/api/v1/cognify":
+            payload = json.loads(request.content)
+            self._record(request, payload)
+            return httpx.Response(200, json={"status": "ok"})
+        if path == "/api/v1/remember":
+            return self._remember(request)
+        if path == "/api/v1/recall":
+            payload = json.loads(request.content)
+            self._record(request, payload)
+            return httpx.Response(200, json=[{"text": "canned:recall", "kind": "graph"}])
+        if path == "/api/v1/forget":
             payload = json.loads(request.content)
             self._record(request, payload)
             return httpx.Response(200, json={"status": "ok"})
@@ -167,6 +177,16 @@ class FakeCognee:
         if name and name not in self.datasets:
             self.datasets.append(str(name))
         return httpx.Response(200, json={"id": f"add-{len(self.requests)}"})
+
+    def _remember(self, request: httpx.Request) -> httpx.Response:
+        payload = self._form_payload(request)
+        self._record(request, payload)
+        name = payload.get("datasetName")
+        if name and name not in self.datasets:
+            self.datasets.append(str(name))
+        # Echo a dataset id (like /add + /cognify) so a later datasets/status poll can use it.
+        dataset_id = f"id-{name}" if name else f"remember-{len(self.requests)}"
+        return httpx.Response(200, json={"id": dataset_id, "dataset_id": dataset_id})
 
     def _login(self, request: httpx.Request) -> httpx.Response:
         form = parse_qs(request.content.decode())

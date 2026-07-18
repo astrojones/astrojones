@@ -194,30 +194,6 @@ class MemMigrateResult(BaseModel):
     estimate: MemIngestEstimate | None = None
 
 
-class ClaudeMemMigrateResult(BaseModel):
-    """migrate-claude-mem outcome: the dry-run readiness report or per-project shipped totals.
-
-    Selection counters (observations/summaries/sessions/per_type) describe everything the
-    filters matched; estimated_docs/per_project/estimate describe only what is still pending
-    after ledger dedup — so a fully-resumed run reports the selection with 0 pending.
-    """
-
-    dataset: str
-    granularity: str
-    db: str
-    dry_run: bool = True
-    observations: int = 0
-    summaries: int = 0
-    sessions: int = 0
-    per_project: dict[str, int] = Field(default_factory=dict, description="pending/shipped docs per project")
-    per_type: dict[str, int] = Field(default_factory=dict, description="selected source rows per type")
-    estimated_docs: int = 0
-    skipped_dedup: int = 0
-    shipped: int = 0
-    node_set: list[str] = Field(default_factory=list, description="base tags; a project: tag is added per batch")
-    estimate: MemIngestEstimate | None = None
-
-
 class MemDoctorResult(BaseModel):
     """mem_doctor verdict: checkable memory health + competing-capture sentinels."""
 
