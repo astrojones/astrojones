@@ -215,13 +215,16 @@ def _capture(repo: str, event: str, payload: dict) -> None:
     """Enqueue a capture row (local sqlite only — never a network call from a hook path).
 
     Skipped entirely when cognee is unconfigured, so setups without a memory backend never
-    accumulate a queue nobody will ever drain.
+    accumulate a queue nobody will ever drain. The gate is ``cognee_client.is_configured()``
+    — the same env-or-local-endpoint resolution the drain and recall use — so a configured
+    local instance captures too. (The old raw COGNEE_BASE_URL check gave local mode a live
+    reader and a dead writer: R2.)
     """
-    if not (os.environ.get("COGNEE_BASE_URL") or "").strip():
-        return
     with suppress(Exception):  # fail-open: capture must never block or break a turn
-        from repo_agent_harness import capture  # noqa: PLC0415 - lazy, keeps the hot path light
+        from repo_agent_harness import capture, cognee_client  # noqa: PLC0415 - lazy, keeps the hot path light
 
+        if not cognee_client.is_configured():
+            return
         capture.enqueue(repo, event, payload)
 
 
@@ -343,8 +346,9 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     """Bounded, fail-open durable-memory recall; returns the section text or ``None``.
 
     ``dataset`` scopes the query to the project's own cognee dataset (from the onboarding
-    marker); ``None`` spans the user's default scope (every dataset), the fallback for repos
-    not yet onboarded and for multi-repo projects that share one dataset.
+    marker); ``None`` resolves to the shared DEFAULT_DATASET inside ``mem.search``. Span-all
+    queries no longer exist — the client refuses a datasets-less search, because a shared
+    server also hosts demo/junk datasets that would leak into recall.
 
     Uses CHUNKS filtered to the ``session_digest`` node set (``capture.CAPTURE_NODE_SET``):
     verbatim retrieval of this harness's own session digests, no server-side LLM synthesis.

@@ -19,12 +19,12 @@ import time
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
-import httpx
-
 from repo_agent_harness import paths
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    import httpx
 
 # Decoded JSON body — cognee endpoints return objects or arrays; some return empty bodies.
 type Json = dict | list | str | int | float | bool | None
@@ -111,6 +111,18 @@ def credentials() -> tuple[str, str] | None:
     return None
 
 
+def is_configured() -> bool:
+    """Module-level twin of :attr:`CogneeClient.configured` for hook hot paths.
+
+    Same predicate — a resolvable base URL (env or local endpoint.json) plus at least one
+    auth mechanism — but without constructing a client: hooks must stay network-object-free
+    (pinned by test) and pay only cheap env/file reads. Keeping capture, drain, and recall
+    on this one resolution is the R2 fix: the old raw COGNEE_BASE_URL check in capture
+    silently dropped every row when only a local instance was configured.
+    """
+    return bool(base_url()) and (credentials() is not None or api_key() is not None)
+
+
 def api_key() -> str | None:
     """Static API key (X-Api-Key header) — the login-less auth path, when provisioned."""
     return (os.environ.get("COGNEE_API_KEY") or "").strip() or None
@@ -142,6 +154,8 @@ class CogneeAuth:
         return {"Authorization": f"Bearer {self._token}"}
 
     async def _login(self, http: httpx.AsyncClient) -> str:
+        import httpx  # noqa: PLC0415 - lazy: hooks import this module for is_configured() only
+
         try:
             resp = await http.post(
                 "/api/v1/auth/login",
@@ -238,6 +252,8 @@ class CogneeClient:
         return bool(self._url) and (self._auth is not None or self._key is not None)
 
     def _ensure_http(self) -> httpx.AsyncClient:
+        import httpx  # noqa: PLC0415 - lazy: hooks import this module for is_configured() only
+
         if self._http is None:
             self._http = httpx.AsyncClient(
                 base_url=self._url or "",
@@ -276,6 +292,8 @@ class CogneeClient:
         if not self.circuit.allow():
             msg = f"cognee circuit open (state={self.circuit.state}); backing off"
             raise CogneeUnavailableError(msg)
+        import httpx  # noqa: PLC0415 - lazy: hooks import this module for is_configured() only
+
         attempts = IDEMPOTENT_ATTEMPTS if idempotent else 1
         last_exc: Exception | None = None
         for attempt in range(attempts):
@@ -356,20 +374,24 @@ class CogneeClient:
         self,
         query: str,
         search_type: str,
-        dataset: str | None,
+        dataset: str,
         top_k: int,
         node_name: list[str] | None = None,
     ) -> Json:
         """POST /api/v1/search (camelCase payload per the live OpenAPI).
 
+        ``dataset`` is mandatory: a datasets-less query makes the server span every dataset
+        it hosts, and on a shared deployment that includes demo/junk corpora (observed live
+        2026-07-18: recall returned a stored "Got it." from an unrelated demo dataset).
         ``node_name`` restricts results to those node-set tags (the belongs_to_set filter,
         wired as ``nodeName``); omitted entirely when not given so the search spans the whole
         dataset. Verified against the live pgvector deployment: both CHUNKS and
         GRAPH_COMPLETION honour it, so recall can fetch only its own digests.
         """
-        payload: dict[str, Json] = {"query": query, "searchType": search_type, "topK": top_k}
-        if dataset:
-            payload["datasets"] = [dataset]
+        if not dataset:
+            msg = "search requires a dataset — a datasets-less query spans every dataset on the server"
+            raise ValueError(msg)
+        payload: dict[str, Json] = {"query": query, "searchType": search_type, "topK": top_k, "datasets": [dataset]}
         if node_name:
             payload["nodeName"] = list(node_name)
         return await self.request("POST", "/api/v1/search", json=payload)

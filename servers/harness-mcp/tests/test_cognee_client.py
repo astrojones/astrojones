@@ -197,10 +197,31 @@ def test_garbage_endpoint_is_ignored(tmp_path, monkeypatch):
 
 def test_configured_true_for_local_only(tmp_path, monkeypatch):
     """With only a local endpoint file, the client is configured (flips capture + recall on)."""
-    for v in ("COGNEE_BASE_URL", "COGNEE_API_KEY", "COGNEE_USER_EMAIL", "COGNEE_USER_PASSWORD", "COGNEE_USERNAME", "COGNEE_PASSWORD"):
+    env = (
+        "COGNEE_BASE_URL",
+        "COGNEE_API_KEY",
+        "COGNEE_USER_EMAIL",
+        "COGNEE_USER_PASSWORD",
+        "COGNEE_USERNAME",
+        "COGNEE_PASSWORD",
+    )
+    for v in env:
         monkeypatch.delenv(v, raising=False)
     _write_endpoint(tmp_path, monkeypatch, base_url="http://127.0.0.1:8765", email="h@l.io", password="pw")
     assert CogneeClient().configured is True
+
+
+async def test_search_requires_dataset():
+    """Span-all search is disallowed.
+
+    A datasets-less query reads every dataset the server hosts — on a shared deployment
+    that includes demo/junk corpora (observed live: recall returned a stored "Got it."
+    from an unrelated demo dataset).
+    """
+    fake = FakeCognee()
+    client = CogneeClient(**fake.client_kwargs())
+    with pytest.raises(ValueError, match="dataset"):
+        await client.search("q", "CHUNKS", "", 5)
 
 
 async def test_delete_dataset_issues_delete():

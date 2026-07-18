@@ -186,6 +186,7 @@ def test_stop_hook_enqueues_without_network(repo, monkeypatch):
     """Zero synchronous HTTP: the handler must not even construct a cognee client."""
     monkeypatch.chdir(repo)
     monkeypatch.setenv("COGNEE_BASE_URL", "https://cognee.example")
+    monkeypatch.setenv("COGNEE_API_KEY", "k")
 
     def _bomb():
         msg = "hook touched the network client"
@@ -199,6 +200,7 @@ def test_stop_hook_enqueues_without_network(repo, monkeypatch):
 def test_pre_compact_hook_enqueues(repo, monkeypatch):
     monkeypatch.chdir(repo)
     monkeypatch.setenv("COGNEE_BASE_URL", "https://cognee.example")
+    monkeypatch.setenv("COGNEE_API_KEY", "k")
     assert agent_hooks.pre_compact({"trigger": "auto"}) == {}
     assert capture.pending_count(str(repo)) == 1
 
@@ -211,9 +213,24 @@ def test_hooks_skip_enqueue_when_cognee_unconfigured(repo, monkeypatch):
     assert capture.pending_count(str(repo)) == 0
 
 
+def test_stop_hook_enqueues_in_local_mode(repo, isolated_harness_home, monkeypatch):
+    """R2 regression: a local endpoint.json with no COGNEE_BASE_URL must still capture.
+
+    Drain and recall gate on the env-or-local-endpoint resolution; capture gating on the raw
+    env var alone gave local mode a live reader and a dead writer (queue empty forever).
+    """
+    monkeypatch.chdir(repo)
+    ep = isolated_harness_home / "cognee" / "endpoint.json"
+    ep.parent.mkdir(parents=True, exist_ok=True)
+    ep.write_text('{"base_url": "http://127.0.0.1:8765", "email": "h@l.io", "password": "pw"}', encoding="utf-8")
+    assert agent_hooks.stop({"session_id": "s1"}) == {}
+    assert capture.pending_count(str(repo)) == 1
+
+
 def test_post_tool_use_piggybacks_capture(repo, monkeypatch):
     monkeypatch.chdir(repo)
     monkeypatch.setenv("COGNEE_BASE_URL", "https://cognee.example")
+    monkeypatch.setenv("COGNEE_API_KEY", "k")
     agent_hooks.post_tool_use({"tool_name": "Edit", "tool_input": {"file_path": str(repo / "src" / "payment.py")}})
     assert capture.pending_count(str(repo)) == 1
 
