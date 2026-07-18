@@ -26,7 +26,14 @@ invents facts to fill a required field when a chunk has no substantive content �
 bind-mounted over the in-image prompt so an empty/near-empty chunk (e.g. a fresh "Got it."-style
 digest) can't get hallucinated into a fabricated recall result.
 
-State lives in the named Docker volume (SQLite + LanceDB + Kuzu); the container is disposable.
+Storage backend (``COGNEE_LOCAL_BACKEND``): the default ``postgres`` adds a pgvector/pgvector:pg17
+sidecar on a shared bridge network, serving relational + vector + graph from one ``cognee_db`` —
+byte-for-byte the remote's storage layer, so local recall exercises the same engines (true parity).
+``embedded`` is the old sidecar-free path (SQLite + LanceDB + Kuzu in the cognee volume): lighter,
+but not storage-representative of the remote. Either way the compute layer (image, LLM, embedder,
+summarize prompt) is identical.
+
+State lives in the named Docker volume(s); the container(s) are disposable.
 ``endpoint.json`` (mode 0600) is the SSOT that lets both the long-lived MCP server and the
 short-lived hook subprocesses resolve the same local endpoint; like ``serena/daemon.json`` it is
 never trusted for liveness (a fresh ``/health`` probe + ``docker inspect`` decides that).
@@ -56,6 +63,26 @@ _DEFAULT_VOLUME = "astrojones-cognee-data"
 _DEFAULT_PORT = 8765
 _DEFAULT_IMAGE = "cognee/cognee:1.4.0"  # pinned, mirrors astrojones/cognee docker-compose.yml
 _DEFAULT_EMAIL = "harness@example.com"  # must be a valid email format (cognee validates it)
+
+# Storage backend. ``postgres`` (default) mirrors the remote deployment exactly — one
+# pgvector/pgvector:pg17 serving relational + vector + graph in a single ``cognee_db`` — so
+# local recall exercises the same pgvector/PG-graph engines as ``cognee.bartix.de`` (true
+# parity, at the cost of a second container). ``embedded`` is the old zero-sidecar path
+# (SQLite + LanceDB + Kuzu in the cognee volume): lighter, but NOT storage-representative of
+# the remote. The compute layer (image, LLM, embedder, summarize prompt) is identical either way.
+_DEFAULT_BACKEND = "postgres"
+_PG_IMAGE = "pgvector/pgvector:pg17"  # mirrors astrojones/cognee docker-compose.yml
+_PG_CONTAINER = "astrojones-cognee-postgres"
+_PG_VOLUME = "astrojones-cognee-pgdata"
+_PG_NETWORK = "astrojones-cognee-net"  # user-defined bridge (host-net is unreliable on macOS)
+_PG_USER = "cognee"
+_PG_PASSWORD = "cognee"  # noqa: S105 - local dev DB on a loopback-only bridge, mirrors remote compose
+_PG_DB = "cognee_db"
+_PG_PORT = 5432  # in-container; not published to the host by default (containers talk over the bridge)
+# Mirror the remote's PG tuning so the pool-behaviour is representative (the remote raised these
+# after cognify/improve bursts exhausted the default 100 connections — see docker-compose.yml).
+_PG_MAX_CONNECTIONS = "300"
+_PG_SHARED_BUFFERS = "1GB"
 
 # Anti-hallucination summarize-prompt override, vendored from astrojones/cognee's
 # prompts/summarize_content.txt (see docker-compose.yml there for the remote's matching mount).
@@ -104,6 +131,41 @@ def port() -> int:
 def image() -> str:
     """The image tag to run (override ``COGNEE_LOCAL_IMAGE``)."""
     return (os.environ.get("COGNEE_LOCAL_IMAGE") or "").strip() or _DEFAULT_IMAGE
+
+
+def backend() -> str:
+    """The storage backend: ``postgres`` (default, remote-parity) or ``embedded``.
+
+    Override with ``COGNEE_LOCAL_BACKEND``; any value other than ``embedded`` resolves to
+    ``postgres`` so a typo fails safe toward the parity path rather than the divergent one.
+    """
+    raw = (os.environ.get("COGNEE_LOCAL_BACKEND") or "").strip().lower()
+    return "embedded" if raw == "embedded" else _DEFAULT_BACKEND
+
+
+def uses_postgres() -> bool:
+    """Whether the postgres/pgvector sidecar is part of the stack."""
+    return backend() == "postgres"
+
+
+def pg_container_name() -> str:
+    """The postgres sidecar container name (override ``COGNEE_LOCAL_PG_CONTAINER``)."""
+    return (os.environ.get("COGNEE_LOCAL_PG_CONTAINER") or "").strip() or _PG_CONTAINER
+
+
+def pg_volume_name() -> str:
+    """The postgres data volume (override ``COGNEE_LOCAL_PG_VOLUME``)."""
+    return (os.environ.get("COGNEE_LOCAL_PG_VOLUME") or "").strip() or _PG_VOLUME
+
+
+def pg_image() -> str:
+    """The postgres image tag (override ``COGNEE_LOCAL_PG_IMAGE``)."""
+    return (os.environ.get("COGNEE_LOCAL_PG_IMAGE") or "").strip() or _PG_IMAGE
+
+
+def network_name() -> str:
+    """The user-defined bridge both containers join (override ``COGNEE_LOCAL_NETWORK``)."""
+    return (os.environ.get("COGNEE_LOCAL_NETWORK") or "").strip() or _PG_NETWORK
 
 
 def user_email() -> str:
@@ -192,6 +254,101 @@ def image_present(tag: str) -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- postgres sidecar
+
+
+def ensure_network() -> bool:
+    """Idempotently create the shared bridge network; True when it exists afterwards."""
+    if _docker(["network", "inspect", network_name()]).returncode == 0:
+        return True
+    created = _docker(["network", "create", network_name()])
+    # A racing peer may have created it between our inspect and create — treat "already exists" as ok.
+    return created.returncode == 0 or "already exists" in (created.stderr or "")
+
+
+def pg_run_args() -> list[str]:
+    """The full ``docker run`` argv (after ``docker``) for the pgvector sidecar.
+
+    One named volume for ``/var/lib/postgresql/data``; joined to the shared bridge under a fixed
+    alias so cognee reaches it by name. ``max_connections``/``shared_buffers`` mirror the remote so
+    the connection-pool behaviour is representative. Not published to the host by default (the
+    bridge is enough for cognee); set ``COGNEE_LOCAL_PG_PORT`` to also expose it on loopback for psql.
+    """
+    args = [
+        "run",
+        "-d",
+        "--name",
+        pg_container_name(),
+        "--restart",
+        "unless-stopped",
+        "--network",
+        network_name(),
+        "-v",
+        f"{pg_volume_name()}:/var/lib/postgresql/data",
+        "-e",
+        f"POSTGRES_USER={_PG_USER}",
+        "-e",
+        f"POSTGRES_PASSWORD={_PG_PASSWORD}",
+        "-e",
+        f"POSTGRES_DB={_PG_DB}",
+    ]
+    host_port = (os.environ.get("COGNEE_LOCAL_PG_PORT") or "").strip()
+    if host_port.isdigit():
+        args += ["-p", f"127.0.0.1:{host_port}:{_PG_PORT}"]
+    args += [
+        pg_image(),
+        "postgres",
+        "-c",
+        f"max_connections={_PG_MAX_CONNECTIONS}",
+        "-c",
+        f"shared_buffers={_PG_SHARED_BUFFERS}",
+    ]
+    return args
+
+
+def pg_ready(name: str, *, timeout: float = _DOCKER_CALL_TIMEOUT_S) -> bool:
+    """Whether postgres accepts connections (``pg_isready`` inside the container)."""
+    proc = _docker(["exec", name, "pg_isready", "-U", _PG_USER, "-d", _PG_DB], timeout=timeout)
+    return proc.returncode == 0
+
+
+def _poll_pg(name: str, budget: float) -> bool:
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        if pg_ready(name):
+            return True
+        time.sleep(_HEALTH_POLL_INTERVAL_S)
+    return False
+
+
+def ensure_postgres(budget: float = 60.0) -> bool:
+    """Find-or-start the pgvector sidecar and return once it accepts connections.
+
+    Idempotent, mirroring ``ensure_local``: a running+ready container is reused, a stopped one is
+    started, an absent one is run (pulling the image first). Returns False (never raises) when the
+    network can't be created, the image can't be pulled, the run fails, or PG never becomes ready
+    within ``budget`` — the caller then aborts the cognee boot rather than let it hit a dead DB.
+    """
+    if not ensure_network():
+        LOG.warning("could not create local cognee network %s", network_name())
+        return False
+    name = pg_container_name()
+    state = container_state(name)
+    if state == "running" and pg_ready(name):
+        return True
+    if state == "absent":
+        if not image_present(pg_image()) and _docker(["pull", pg_image()], timeout=_PULL_TIMEOUT_S).returncode != 0:
+            LOG.warning("could not pull postgres image %s", pg_image())
+            return False
+        run = _docker(pg_run_args())
+        if run.returncode != 0 and "is already in use" not in (run.stderr or ""):
+            LOG.warning("local cognee postgres `docker run` failed: %s", (run.stderr or "").strip()[:300])
+            return False
+    elif state == "exited":
+        _docker(["start", name])
+    return _poll_pg(name, budget)
+
+
 # --------------------------------------------------------------------------- endpoint.json
 
 
@@ -244,7 +401,7 @@ def container_env(email: str, password: str) -> dict[str, str]:
     happy (with ``COGNEE_SKIP_CONNECTION_TEST``) while recall stays inert until a key is set.
     """
     key = openrouter_key() or _KEY_PLACEHOLDER
-    return {
+    env = {
         "DATA_ROOT_DIRECTORY": "/data/.cognee_data",
         "SYSTEM_ROOT_DIRECTORY": "/data/.cognee_system",
         "DEFAULT_USER_EMAIL": email,
@@ -259,6 +416,28 @@ def container_env(email: str, password: str) -> dict[str, str]:
         "LLM_MODEL": _LLM_MODEL,
         "LLM_ENDPOINT": _LLM_ENDPOINT,
         "LLM_API_KEY": key,
+    }
+    if uses_postgres():
+        env.update(pg_client_env())
+    return env
+
+
+def pg_client_env() -> dict[str, str]:
+    """Cognee's DB/vector/graph connection env pointing at the pgvector sidecar.
+
+    Mirrors the remote deployment: all three stores share one ``cognee_db`` on one postgres,
+    reached by the sidecar's network alias (``pg_container_name``) over the shared bridge — the
+    same value cognee's alembic migration and pgvector writes both use.
+    """
+    host = pg_container_name()
+    common = {"HOST": host, "PORT": str(_PG_PORT), "USERNAME": _PG_USER, "PASSWORD": _PG_PASSWORD, "NAME": _PG_DB}
+    return {
+        "DB_PROVIDER": "postgres",
+        "VECTOR_DB_PROVIDER": "pgvector",
+        "GRAPH_DATABASE_PROVIDER": "postgres",
+        **{f"DB_{k}": v for k, v in common.items()},
+        **{f"VECTOR_DB_{k}": v for k, v in common.items()},
+        **{f"GRAPH_DATABASE_{k}": v for k, v in common.items()},
     }
 
 
@@ -283,6 +462,8 @@ def docker_run_args(email: str, password: str) -> list[str]:
         "-v",
         f"{volume_name()}:/data",
     ]
+    if uses_postgres():  # join the shared bridge so cognee reaches the pgvector sidecar by name
+        args += ["--network", network_name()]
     if _SUMMARIZE_PROMPT_FILE.is_file():
         args += ["-v", f"{_SUMMARIZE_PROMPT_FILE}:{_SUMMARIZE_PROMPT_CONTAINER_PATH}:ro"]
     for key, value in container_env(email, password).items():
@@ -336,7 +517,7 @@ def _login_ok(http: httpx.Client, email: str, password: str) -> bool:
 # --------------------------------------------------------------------------- lifecycle
 
 
-def ensure_local(budget: float = 120.0) -> str | None:
+def ensure_local(budget: float = 120.0) -> str | None:  # noqa: PLR0911 - legitimate early-exit guards (docker/pg/state/health branches)
     """Find-or-start the local container and return its base URL once it verifiably answers.
 
     Idempotent: a running, healthy container is reused (endpoint refreshed, no ``docker run``).
@@ -346,6 +527,9 @@ def ensure_local(budget: float = 120.0) -> str | None:
     Returns None (never raises) when Docker is unavailable or the container never becomes healthy.
     """
     if not docker_available():
+        return None
+    if uses_postgres() and not ensure_postgres():
+        LOG.warning("local cognee postgres sidecar did not come up; aborting cognee boot")
         return None
     name = container_name()
     base = local_base_url()
@@ -419,13 +603,15 @@ def up(budget: float = _PULL_TIMEOUT_S) -> dict:
 
 def status() -> dict:
     """Report liveness without starting anything."""
+    have_docker = docker_available()
     name = container_name()
-    state = container_state(name) if docker_available() else "docker-unavailable"
+    state = container_state(name) if have_docker else "docker-unavailable"
     base = local_base_url()
-    return {
+    out = {
         "ok": True,
         "enabled": enabled(),
-        "docker_available": docker_available(),
+        "docker_available": have_docker,
+        "backend": backend(),
         "container": name,
         "state": state,
         "healthy": state == "running" and health_ok(base),
@@ -434,19 +620,38 @@ def status() -> dict:
         "volume": volume_name(),
         "embedding_key_present": openrouter_key() is not None,
     }
+    if uses_postgres():
+        pg = pg_container_name()
+        pg_state = container_state(pg) if have_docker else "docker-unavailable"
+        out["postgres"] = {
+            "container": pg,
+            "state": pg_state,
+            "ready": have_docker and pg_state == "running" and pg_ready(pg),
+            "image": pg_image(),
+            "volume": pg_volume_name(),
+            "network": network_name(),
+        }
+    return out
 
 
 def stop() -> dict:
-    """Stop the container (data persists in the volume)."""
+    """Stop the container(s) (data persists in the volume(s))."""
     proc = _docker(["stop", container_name()])
-    return {"ok": proc.returncode == 0, "action": "stop", "container": container_name()}
+    ok = proc.returncode == 0
+    if uses_postgres():
+        ok = _docker(["stop", pg_container_name()]).returncode == 0 and ok
+    return {"ok": ok, "action": "stop", "container": container_name()}
 
 
 def down() -> dict:
-    """Remove the container, keeping the volume (a fresh ``up`` reattaches the same data)."""
+    """Remove the container(s), keeping the volume(s) (a fresh ``up`` reattaches the same data)."""
     proc = _docker(["rm", "-f", container_name()])
+    ok = proc.returncode == 0
+    if uses_postgres():
+        ok = _docker(["rm", "-f", pg_container_name()]).returncode == 0 and ok
+        _docker(["network", "rm", network_name()])  # best-effort; harmless if absent or still referenced
     clear_endpoint()
-    return {"ok": proc.returncode == 0, "action": "down", "container": container_name()}
+    return {"ok": ok, "action": "down", "container": container_name()}
 
 
 def logs(tail: int = 80) -> dict:
@@ -456,8 +661,20 @@ def logs(tail: int = 80) -> dict:
 
 
 def nuke() -> dict:
-    """Destroy the container AND its volume — the only irreversible action (confirm-gated by CLI)."""
+    """Destroy the container(s) AND volume(s) — the only irreversible action (confirm-gated by CLI).
+
+    In postgres mode this also removes the pgvector sidecar, its data volume, and the shared
+    network, so a subsequent ``up`` starts from a genuinely fresh database (the parity test's
+    precondition). The cognee volume's removal result is the reported ``ok``.
+    """
     _docker(["rm", "-f", container_name()])
     vol = _docker(["volume", "rm", volume_name()])
+    result = {"ok": vol.returncode == 0, "action": "nuke", "container": container_name(), "volume": volume_name()}
+    if uses_postgres():
+        _docker(["rm", "-f", pg_container_name()])
+        pg_vol = _docker(["volume", "rm", pg_volume_name()])
+        _docker(["network", "rm", network_name()])
+        result["ok"] = result["ok"] and pg_vol.returncode == 0
+        result["postgres_volume"] = pg_volume_name()
     clear_endpoint()
-    return {"ok": vol.returncode == 0, "action": "nuke", "container": container_name(), "volume": volume_name()}
+    return result
