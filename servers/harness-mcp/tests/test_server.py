@@ -188,3 +188,35 @@ def test_seed_serena_languages_skips_when_gate_disabled(repo, monkeypatch):
 
 def test_seed_serena_languages_noop_outside_repo():
     server._seed_serena_languages(None)  # must not raise
+
+
+def test_lifespan_skips_cognee_when_disabled(monkeypatch):
+    """The master switch gates the lifespan: off -> no client built; on -> the gate opens.
+
+    Driven with ``repo_root`` -> None so the lifespan skips its heavy (serena/watcher) paths;
+    a spy on ``get_client`` proves the cognee block runs only when the switch is armed.
+    """
+    import asyncio
+
+    from repo_agent_harness import cognee_client, git
+
+    monkeypatch.setattr(git, "repo_root", lambda: None)
+    calls = []
+
+    class _Client:
+        configured = False
+
+    monkeypatch.setattr(cognee_client, "get_client", lambda: (calls.append(1), _Client())[1])
+
+    async def _drive():
+        async with server._lifespan(server.mcp):  # _lifespan ignores its app arg (`_ = app`)
+            pass
+
+    # Switch off (conftest strips REPO_AGENT_HARNESS_*): the cognee block is skipped entirely.
+    asyncio.run(_drive())
+    assert calls == []
+
+    # Armed: the gate opens and the shared client is resolved.
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "1")
+    asyncio.run(_drive())
+    assert calls == [1]

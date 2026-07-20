@@ -152,11 +152,16 @@ async def _lifespan(app: FastMCP) -> AsyncIterator[dict]:
     # configured — a remote now, or a local container once it is up. Local auto-start is opt-in
     # (COGNEE_LOCAL_ENABLE=1); by default the server never boots local unprompted, so a machine
     # with a remote it merely failed to inherit can't spin up a split-brain second store.
-    cognee = cognee_client.get_client()
+    # Gated behind the master switch (default off): a bare main checkout does zero cognee runtime
+    # regardless of inherited env or a stray local endpoint.json. The sync object is built either way
+    # (inert until start(); teardown's sync.stop() on an unstarted sync is a no-op).
     sync = cognee_sync.CogneeSync(root)
-    if cognee.configured:
-        sync.start(cognee)
-    local_task = asyncio.create_task(_bring_up_local(sync)) if root and not cognee.configured else None
+    local_task = None
+    if cognee_client.cognee_runtime_enabled():
+        cognee = cognee_client.get_client()
+        if cognee.configured:
+            sync.start(cognee)
+        local_task = asyncio.create_task(_bring_up_local(sync)) if root and not cognee.configured else None
     try:
         yield {}
     finally:

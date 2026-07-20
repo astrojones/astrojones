@@ -333,8 +333,12 @@ def _recall_section(name: str, dataset: str | None, client: CogneeClient | None)
     ``None`` whenever cognee is unconfigured, unreachable, times out, or yields nothing —
     the caller simply omits the section rather than aborting session start.
     """
-    if (os.environ.get(_RECALL_FLAG_ENV) or "").strip().lower() not in {"1", "true", "yes", "on"}:
-        return None  # opt-in: cognee recall stays out of injected context until enabled
+    from repo_agent_harness import cognee_client  # noqa: PLC0415 - lazy: keep the hooks import-light
+
+    # Master switch off, or recall not opted in (COGNEE_CM_RECALL): cognee text stays out of context.
+    recall_opted_in = (os.environ.get(_RECALL_FLAG_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+    if not cognee_client.cognee_runtime_enabled() or not recall_opted_in:
+        return None
     import asyncio  # noqa: PLC0415 - lazy: keep the sync hot-path hooks import-light
 
     try:

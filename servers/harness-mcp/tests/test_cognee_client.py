@@ -19,6 +19,18 @@ def anyio_backend():
     return "asyncio"
 
 
+def test_runtime_disabled_by_default(monkeypatch):
+    """Master switch defaults off (conftest strips the env family); armed by 1/true/yes/on."""
+    monkeypatch.delenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", raising=False)
+    assert cognee_client.cognee_runtime_enabled() is False
+    for val in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", val)
+        assert cognee_client.cognee_runtime_enabled() is True
+    for val in ("0", "", "off", "no"):
+        monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", val)
+        assert cognee_client.cognee_runtime_enabled() is False
+
+
 async def test_login_is_lazy_and_shared():
     """No login happens at construction; the first request logs in once, later ones reuse it."""
     fake = FakeCognee(datasets=["kolbe"])

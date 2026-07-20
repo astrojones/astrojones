@@ -11,11 +11,19 @@ from repo_agent_harness import agent_hooks, cli
 def _enable_cm_recall(monkeypatch):
     """Enable the opt-in SessionStart cognee recall for these hook tests.
 
-    Recall is gated behind COGNEE_CM_RECALL (default off); enabling it here lets the recall
-    paths (present + failure-mode) exercise real behavior. The default-off gate has its own
-    dedicated test that unsets it.
+    Recall is gated behind BOTH the cognee master switch (REPO_AGENT_HARNESS_COGNEE_ENABLE,
+    stripped off by conftest) and COGNEE_CM_RECALL (default off); arm both here so the recall
+    paths (present + failure-mode) exercise real behavior. Each gate has its own dedicated test
+    that unsets it.
     """
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "1")
     monkeypatch.setenv("COGNEE_CM_RECALL", "1")
+
+
+def test_recall_none_when_runtime_disabled(monkeypatch):
+    """Master switch off wins over COGNEE_CM_RECALL=1: recall stays out of session context."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "0")
+    assert agent_hooks._recall_section("proj", "proj", None) is None
 
 
 def _run(payload, repo, monkeypatch, capsys, raw=None, event="pre-tool-use"):

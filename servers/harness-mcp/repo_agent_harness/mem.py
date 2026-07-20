@@ -101,6 +101,14 @@ def _error(exc: CogneeError, estimate: MemIngestEstimate | None = None) -> MemEr
     return MemError(error=str(exc), hint=hint, status=exc.status, estimate=estimate)
 
 
+def _disabled() -> MemError:
+    """The uniform result when the cognee master switch is off (see ``cognee_runtime_enabled``)."""
+    return MemError(
+        error="cognee runtime disabled on this branch",
+        hint="set REPO_AGENT_HARNESS_COGNEE_ENABLE=1 to enable durable memory",
+    )
+
+
 async def search(
     inp: MemSearchIn, client: CogneeClient | None = None, *, root: str | None = None
 ) -> MemSearchResult | MemError:
@@ -110,6 +118,8 @@ async def search(
     dataset via :func:`resolve_dataset`, so reads and writes agree on scope. Naming another
     dataset explicitly is the way to reach a different project.
     """
+    if not cognee_client.cognee_runtime_enabled():
+        return _disabled()
     dataset = inp.dataset or resolve_dataset(root)
     try:
         results = await _client(client).search(
@@ -144,6 +154,8 @@ async def remember(
     ``inp.dataset=None`` resolves through the conventions table (resolve_dataset), so an
     onboarded repo's facts land in its own dataset when the caller passes ``root``.
     """
+    if not cognee_client.cognee_runtime_enabled():
+        return _disabled()
     dataset = inp.dataset or resolve_dataset(root)
     text = inp.text
     if inp.metadata:
@@ -264,6 +276,8 @@ async def stats(inp: MemStatsIn, client: CogneeClient | None = None) -> MemStats
     cognee exposes no node/edge census endpoint, so this returns dataset existence and
     pipeline status with ``node_counts_supported=False`` rather than faking authority.
     """
+    if not cognee_client.cognee_runtime_enabled():
+        return _disabled()
     c = _client(client)
     try:
         datasets = await c.datasets()
@@ -333,6 +347,8 @@ async def ontology(inp: MemOntologyIn, client: CogneeClient | None = None) -> Me
     The upload key is a content hash, so re-running with the same dict is a no-op and any
     edit produces a new key (the server keeps both; cognify selects by ``ontologyKey``).
     """
+    if not cognee_client.cognee_runtime_enabled():
+        return _disabled()
     if not inp.individuals:
         return MemError(error="no individuals provided", hint="pass {name: type, ...}")
     xml = ontology_document(inp.individuals)
@@ -461,6 +477,15 @@ async def doctor(client: CogneeClient | None = None, root: str | None = None) ->
     """
     c = _client(client)
     out = MemDoctorResult(configured=c.configured)
+    if not cognee_client.cognee_runtime_enabled():
+        # Diagnostic stays functional when the master switch is off: report it, skip network probes.
+        out.hints.append(
+            "cognee runtime disabled (REPO_AGENT_HARNESS_COGNEE_ENABLE unset); mem_* tools are inert on this branch"
+        )
+        out.hints.extend(_capture_sentinels())
+        out.hints.extend(_heartbeat_hints(root))
+        out.hints.extend(_secrets_hints(root))
+        return out
     if not c.configured:
         out.hints.append(NOT_CONFIGURED_HINT)
         out.hints.extend(_capture_sentinels())

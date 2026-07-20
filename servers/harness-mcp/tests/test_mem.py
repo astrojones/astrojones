@@ -27,6 +27,31 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _enable_cognee_runtime(monkeypatch):
+    """These tests exercise cognee logic, so arm the master switch (conftest strips it off by default)."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "1")
+
+
+async def test_search_disabled_returns_error(monkeypatch):
+    """Switch off -> search short-circuits to the disabled MemError, never touching the client."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "0")
+    out = await mem.search(
+        MemSearchIn(query="x", search_type="CHUNKS", dataset="d", top_k=3), client=_wired(FakeCognee())
+    )
+    assert isinstance(out, MemError)
+    assert "disabled" in out.error
+    assert "REPO_AGENT_HARNESS_COGNEE_ENABLE" in (out.hint or "")
+
+
+async def test_doctor_reports_disabled(monkeypatch):
+    """Switch off -> doctor stays functional: reports the disabled state and makes no network probe."""
+    monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "0")
+    out = await mem.doctor(client=_wired(FakeCognee()))
+    assert out.reachable is False
+    assert any("runtime disabled" in h for h in out.hints)
+
+
 def _wired(fake: FakeCognee) -> CogneeClient:
     return CogneeClient(**fake.client_kwargs())
 

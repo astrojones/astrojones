@@ -128,6 +128,17 @@ def api_key() -> str | None:
     return (os.environ.get("COGNEE_API_KEY") or "").strip() or None
 
 
+def cognee_runtime_enabled() -> bool:
+    """Master switch: all cognee runtime (sync loop, local bring-up, recall, mem_* tools) is off unless armed.
+
+    A bare checkout already does no cognee runtime (sync starts only when ``configured``, recall and
+    local autoboot are default-off); this makes that guarantee explicit and immune to inherited env or a
+    stray local ``endpoint.json``. Pure env read (no network object, no spawned child) so it is safe on
+    the memory path (invariant I2). Default off; armed by ``1``/``true``/``yes``/``on``.
+    """
+    return (os.environ.get("REPO_AGENT_HARNESS_COGNEE_ENABLE") or "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class CogneeAuth:
     """Form login against ``/api/v1/auth/login``; bearer token held in memory only.
 
