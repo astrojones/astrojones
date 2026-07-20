@@ -65,8 +65,13 @@ class SyncLedger:
         # create_all would try to materialise the claude-mem tables in our DB.
         SQLModel.metadata.create_all(self._engine, tables=[SQLModel.metadata.tables[SyncItem.__tablename__]])
 
-    def watermark(self, kind: str) -> int:
-        """The max ``source_id`` of a verified-ok row for ``kind`` (0 when none exist yet).
+    def watermark(self, kind: str, dataset: str) -> int:
+        """The max ``source_id`` of a verified-ok row for ``kind`` in ``dataset`` (0 when none yet).
+
+        Scoped by ``dataset``: the ledger is machine-global (one file for every repo's
+        CogneeSync) and claude-mem ids are a global autoincrement whose ranges interleave
+        across projects, so an unscoped watermark lets one dataset's high ids strand
+        another's low ids. Each dataset carries its own independent watermark.
 
         CONTRACT for callers (CogneeSync, Phase 3): ship rows strictly in ``source_id``
         order and STOP the batch on the first failure — do NOT record a later ok row past
@@ -75,10 +80,14 @@ class SyncLedger:
         which would then never be re-read (content-hash dedup can't help a row never
         re-fetched). Processing in order + stop-on-failure keeps the watermark a true
         contiguous low-water mark.
+
+        NOTE (recovery): rows stranded *below* this dataset's max-ok id — e.g. low ids never
+        shipped because a pre-fix global watermark skipped them — are not re-read by normal
+        cycles; recovering them needs an explicit watermark reset/backfill for the dataset.
         """
         with Session(self._engine) as session:
             stmt = select(func.max(SyncItem.source_id)).where(
-                SyncItem.kind == kind, SyncItem.verify_status == VERIFY_OK
+                SyncItem.kind == kind, SyncItem.dataset == dataset, SyncItem.verify_status == VERIFY_OK
             )
             result = session.exec(stmt).one()
         return int(result) if result is not None else 0
@@ -105,10 +114,10 @@ class SyncLedger:
             session.add(item)
             session.commit()
 
-    def already_ok(self, content_hash: str) -> bool:
-        """Whether a verified-ok row already exists for ``content_hash`` (content-addressed dedup)."""
+    def already_ok(self, content_hash: str, dataset: str) -> bool:
+        """Whether a verified-ok row already exists for ``content_hash`` in ``dataset`` (content-addressed dedup)."""
         with Session(self._engine) as session:
             stmt = select(SyncItem.id).where(
-                SyncItem.content_hash == content_hash, SyncItem.verify_status == VERIFY_OK
+                SyncItem.content_hash == content_hash, SyncItem.dataset == dataset, SyncItem.verify_status == VERIFY_OK
             )
             return session.exec(stmt).first() is not None

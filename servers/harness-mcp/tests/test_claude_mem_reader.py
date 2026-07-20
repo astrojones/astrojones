@@ -244,19 +244,37 @@ def test_ledger_creates_its_own_db_under_sync_ledger_file():
 
 def test_ledger_watermark_only_advances_on_ok_rows():
     ledger = SyncLedger()
-    assert ledger.watermark("obs") == 0  # empty
+    assert ledger.watermark("obs", "ds") == 0  # empty
     ledger.record("obs", 5, "h5", "ds")
     ledger.record("obs", 3, "h3", "ds")  # lower id, still ok
-    assert ledger.watermark("obs") == 5
+    assert ledger.watermark("obs", "ds") == 5
     ledger.record("obs", 10, "h10", "ds", verify_status="failed")  # higher id but NOT ok
-    assert ledger.watermark("obs") == 5  # a failed ship must not advance the watermark
-    assert ledger.watermark("sum") == 0  # kinds are independent
+    assert ledger.watermark("obs", "ds") == 5  # a failed ship must not advance the watermark
+    assert ledger.watermark("sum", "ds") == 0  # kinds are independent
 
 
 def test_ledger_already_ok_dedup():
     ledger = SyncLedger()
-    assert ledger.already_ok("h1") is False
+    assert ledger.already_ok("h1", "ds") is False
     ledger.record("sum", 1, "h1", "ds")
-    assert ledger.already_ok("h1") is True
+    assert ledger.already_ok("h1", "ds") is True
     ledger.record("sum", 2, "h2", "ds", verify_status="failed")
-    assert ledger.already_ok("h2") is False  # a failed row is not a dedup hit
+    assert ledger.already_ok("h2", "ds") is False  # a failed row is not a dedup hit
+
+
+def test_ledger_watermark_and_dedup_are_dataset_scoped():
+    """Progress and dedup are scoped per dataset, not globally.
+
+    The ledger is machine-global (one file for every repo's CogneeSync) and claude-mem ids
+    are a global autoincrement whose ranges interleave across projects, so an unscoped
+    watermark/dedup would let the project with the highest ids strand every other project.
+    """
+    ledger = SyncLedger()
+    ledger.record("obs", 100, "ha", "cm_alpha")  # alpha owns a high id
+    ledger.record("obs", 5, "hb", "cm_beta")  # beta's ids sit below alpha's
+    # Each dataset advances only its own watermark — beta is NOT dragged up to 100 by alpha.
+    assert ledger.watermark("obs", "cm_alpha") == 100
+    assert ledger.watermark("obs", "cm_beta") == 5
+    # Dedup is per-dataset: the same content_hash in a different dataset is not a hit.
+    assert ledger.already_ok("ha", "cm_alpha") is True
+    assert ledger.already_ok("ha", "cm_beta") is False
