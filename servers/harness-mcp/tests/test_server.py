@@ -266,3 +266,21 @@ def test_repo_read_range_accepts_relative_path_alias(repo, monkeypatch):
     assert _run_tool(
         "repo_read_range", {"relative_path": "pyproject.toml", "start_line": 1, "end_line": 2}
     ) == _run_tool("repo_read_range", {"path": "pyproject.toml", "start_line": 1, "end_line": 2})
+
+
+def test_symbols_overview_schema_is_flat():
+    import asyncio
+
+    async def go():
+        return await server.mcp.get_tool("repo_symbols_overview")
+
+    tool = asyncio.run(go())
+    props = set(tool.parameters.get("properties", {}))
+    assert "inp" not in props
+    assert {"path", "limit"} <= props
+
+
+def test_symbols_overview_accepts_flat_params(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    out = _run_tool("repo_symbols_overview", {"path": "src", "limit": 50})
+    assert "symbols" in out and "error" not in out

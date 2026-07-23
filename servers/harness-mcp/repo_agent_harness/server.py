@@ -434,7 +434,12 @@ def repo_read_range(
 
 
 @mcp.tool()
-def repo_symbols_overview(inp: symbols.SymbolsOverviewIn) -> dict:
+def repo_symbols_overview(
+    path: Annotated[
+        str | None, Field(description="Repo-relative file or directory prefix to scope to; None = whole repo")
+    ] = None,
+    limit: Annotated[int, Field(ge=1, le=2000, description="Maximum symbols to return")] = 200,
+) -> dict:
     """Symbol map from the static tree-sitter index — no Serena launch, always current.
 
     The preferred first move for code orientation: names, kinds, spans, and nesting per
@@ -442,6 +447,7 @@ def repo_symbols_overview(inp: symbols.SymbolsOverviewIn) -> dict:
     the index cannot answer — references, implementations, diagnostics, renames.
     """
     root = git.repo_root()
+    inp = symbols.SymbolsOverviewIn(path=path, limit=limit)
     return symbols.overview(root, inp).model_dump(exclude_none=True) if root else _no_repo()
 
 
