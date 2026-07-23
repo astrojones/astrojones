@@ -43,27 +43,44 @@ def _deny(reason: str) -> dict:
     }
 
 
-def _serena_gate_blocks(repo: str, path: str) -> tuple[bool, str]:
+def _is_precise_range_read(tin: dict) -> bool:
+    """Whether a native Read is scoped to an explicit line window (offset and a positive limit).
+
+    Such a read is the ergonomic equivalent of repo_read_range's start/end, so the onboarded gate
+    lets it through instead of forcing symbol navigation for a deliberately bounded slice.
+    """
+    offset, limit = tin.get("offset"), tin.get("limit")
+    return isinstance(offset, int) and isinstance(limit, int) and limit > 0
+
+
+def _serena_gate_blocks(repo: str, path: str, tin: dict | None = None) -> tuple[bool, str]:
     """Return (blocks, message) deciding whether a native Read of ``path`` is denied.
 
-    Denies reads of *code* files to keep code discovery on Serena; the message varies by
-    onboarding status (serena_gate.UNBOARDED_MSG vs BOARDED_MSG). Fails OPEN for non-code
-    files, paths outside the repo, the env escape, or any error. The same predicate gates
-    repo_read_range in server.py, so no ungated whole-file code path is left open.
+    Denies whole-file reads of *code* files to keep code discovery on Serena; the message varies by
+    onboarding status (serena_gate.UNBOARDED_MSG vs BOARDED_MSG). Once onboarded, a Read scoped to
+    an explicit line window (offset+limit) is allowed — it is the sanctioned equivalent of
+    repo_read_range. Fails OPEN for non-code files, paths outside the repo, the env escape, or any
+    error. The same predicate gates repo_read_range in server.py, so no ungated whole-file code
+    path is left open.
     """
     if serena_gate.gate_disabled():
         return False, ""
     try:
         target = Path(path).resolve()
         rootp = Path(repo).resolve()
-        if rootp != target and rootp not in target.parents:
-            return False, ""  # outside the repo — not our concern
-        if not serena_gate.is_code_file(target):
-            return False, ""  # non-code files are always readable
-        msg = serena_gate.UNBOARDED_MSG if not serena_gate.is_onboarded(rootp) else serena_gate.BOARDED_MSG
-        return True, msg  # noqa: TRY300 — intentional return in try; fallthrough catch is fail-open
+        onboarded = serena_gate.is_onboarded(rootp)
     except OSError:
         return False, ""  # fail open
+    if rootp != target and rootp not in target.parents:
+        return False, ""  # outside the repo — not our concern
+    if not serena_gate.is_code_file(target):
+        return False, ""  # non-code files are always readable
+    # Once onboarded, a bounded window (offset+limit) == repo_read_range; let it through.
+    # Pre-onboarding even a ranged read is blocked, so it can't become a loophole that skips
+    # onboarding (repo_read_range is refused pre-onboarding for exactly that reason).
+    if onboarded and _is_precise_range_read(tin or {}):
+        return False, ""
+    return True, serena_gate.BOARDED_MSG if onboarded else serena_gate.UNBOARDED_MSG
 
 
 def pre_tool_use(data: dict, root: str | None = None) -> dict:
@@ -91,7 +108,7 @@ def pre_tool_use(data: dict, root: str | None = None) -> dict:
             if secrets.is_secret_path(rel, cfg):
                 return _deny(f"Accessing a secret path ('{rel}') is blocked by policy.")
             if tool == "Read" and repo is not None:
-                blocks, msg = _serena_gate_blocks(repo, path)
+                blocks, msg = _serena_gate_blocks(repo, path, tin)
                 if blocks:
                     return _deny(msg)
 

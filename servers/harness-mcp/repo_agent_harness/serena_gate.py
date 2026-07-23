@@ -69,11 +69,14 @@ UNBOARDED_MSG = (
     f"(Set {GATE_ENV}=1 to disable this gate.)"
 )
 
-# Shown to native Read once onboarded — code reading stays routed through the harness.
+# Shown to native Read once onboarded — whole-file code reading stays routed through the harness,
+# but a Read scoped to an explicit offset+limit window is allowed (the native equivalent of
+# repo_read_range) and never reaches this message.
 BOARDED_MSG = (
-    "Read is forbidden for code discovery in this repo. Navigate by symbol "
-    "(serena_get_symbols_overview / serena_find_symbol), or read a precise range with "
-    f"repo_read_range, instead. (Set {GATE_ENV}=1 to disable this gate.)"
+    "Whole-file Read is forbidden for code discovery in this repo. Navigate by symbol "
+    "(serena_get_symbols_overview / serena_find_symbol), or read a precise range — either "
+    "repo_read_range, or a native Read with an explicit offset+limit. "
+    f"(Set {GATE_ENV}=1 to disable this gate.)"
 )
 
 

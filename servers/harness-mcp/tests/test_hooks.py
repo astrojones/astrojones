@@ -195,6 +195,43 @@ def test_gate_ignores_path_outside_repo(tmp_path):
     assert blocks is False
 
 
+def _onboard(root):
+    mem = root / ".serena" / "memories"
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "core.md").write_text("onboarded\n")
+
+
+def test_gate_allows_ranged_read_when_onboarded(tmp_path):
+    """A native Read scoped to offset+limit is the equivalent of repo_read_range — allowed once onboarded."""
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    _onboard(tmp_path)
+    blocks, _ = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"), {"offset": 10, "limit": 40})
+    assert blocks is False
+
+
+def test_gate_blocks_ranged_read_before_onboarding(tmp_path):
+    """Pre-onboarding a ranged Read stays blocked, so it can't skip onboarding (no loophole)."""
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    blocks, msg = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"), {"offset": 10, "limit": 40})
+    assert blocks is True and "call serena_initial_instructions" in msg
+
+
+def test_gate_blocks_whole_file_read_when_onboarded(tmp_path):
+    """Without an offset+limit window, an onboarded code Read is still routed to symbol nav."""
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    _onboard(tmp_path)
+    blocks, msg = agent_hooks._serena_gate_blocks(str(tmp_path), str(tmp_path / "mod.py"), {})
+    assert blocks is True and "Navigate by symbol" in msg
+
+
+def test_precise_range_read_predicate():
+    assert agent_hooks._is_precise_range_read({"offset": 1, "limit": 50}) is True
+    assert agent_hooks._is_precise_range_read({"limit": 50}) is False  # unbounded start
+    assert agent_hooks._is_precise_range_read({"offset": 1}) is False  # unbounded end
+    assert agent_hooks._is_precise_range_read({"offset": 1, "limit": 0}) is False
+    assert agent_hooks._is_precise_range_read({}) is False
+
+
 # --------------------------------------------------------------- session-start recall
 
 
