@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
     "watchfiles>=1.0",
-    "serena-agent @ git+https://github.com/oraios/serena@2449313c0d7427275c4c66aedff7d4881782f713",
+    "serena-agent @ git+https://github.com/oraios/serena@5e8662b283241910a5062b058b09627288c16f0c",
     "httpx>=0.27",
     "tree-sitter>=0.23,<0.26",  # 0.26 ABI-breaks the language-pack wheels: garbage spans/segfaults on deep walks
     "tree-sitter-language-pack>=0.13",

@@ -1,11 +1,11 @@
 {
-  "pin": "2449313c0d7427275c4c66aedff7d4881782f713",
-  "spec": "git+https://github.com/oraios/serena@2449313c0d7427275c4c66aedff7d4881782f713",
+  "pin": "5e8662b283241910a5062b058b09627288c16f0c",
+  "spec": "git+https://github.com/oraios/serena@5e8662b283241910a5062b058b09627288c16f0c",
   "tools": [
     {
       "name": "replace_content",
       "title": "Replace Content",
-      "description": "Replaces one or more occurrences of a given pattern in a file with new content.\n\nThis is the preferred way to replace content in a file whenever the symbol-level\ntools are not appropriate.\n\nVERY IMPORTANT: The \"regex\" mode allows very large sections of code to be replaced without fully quoting them!\nUse a regex of the form \"beginning.*?end-of-text-to-be-replaced\" to be faster and more economical!\nALWAYS try to use wildcards to avoid specifying the exact content to be replaced,\nespecially if it spans several lines. Note that you cannot make mistakes, because if the regex should match\nmultiple occurrences while you disabled `allow_multiple_occurrences`, an error will be returned, and you can retry\nwith a revised regex.\nTherefore, using regex mode with suitable wildcards is usually the best choice!.",
+      "description": "Replaces one or more occurrences of a given pattern in a file with new content.\n\nVERY IMPORTANT: The \"regex\" mode allows very large sections of code to be replaced WITHOUT\nquoting them fully: use a needle of the form \"beginning.*?end-of-text-to-be-replaced\" with\nwildcards instead of pasting the exact original text \u2014 shorter, cheaper, and you cannot make\nmistakes, because an ambiguous match returns an error you can refine, so wildcards are safe.\nPrefer regex mode with suitable wildcards for long multi-line replacements; use the\nsymbol-level editors when replacing a whole method/class.",
       "inputSchema": {
         "properties": {
           "relative_path": {
@@ -48,21 +48,100 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
+      "annotations": {
+        "title": "Replace Content",
+        "readOnlyHint": false,
+        "destructiveHint": true
+      }
+    },
+    {
+      "name": "replace_in_files",
+      "title": "Replace In Files",
+      "description": "Replaces occurrences of a pattern across multiple files in ONE call.\n\nThis is the preferred tool for repeated small edits (renames, import swaps, annotation changes,\npath prefixes) spanning several files or many places in one file: one call with a SHORT pattern\nreplaces many single-file replacements with long disambiguating needles.\n\nRecommended protocol whenever there is ANY risk of unintended replacements:\n1. Call with dry_run=True: every prospective change is returned as a minimal line diff with an\n   occurrence id; nothing is modified.\n2. Call again with dry_run=False, passing the ids you want in occurrence_ids (omit it to apply\n   all). You pick the desired replacements from the list - no counting, no needle-crafting.\n\nFor clearly unambiguous bulk replacements you may skip the dry run; pass expected_count as a\nguard. If the actual number of matches differs, NOTHING is changed and the diff list is\nreturned, so a failed guard costs one call and gives you the dry-run output to select from. Returns in a dry run, the prospective changes; otherwise a summary of the applied replacements.",
+      "inputSchema": {
         "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
+          "needle": {
+            "title": "Needle",
+            "type": "string",
+            "description": "The string (mode \"literal\") or regular expression (mode \"regex\"; Python `re`\nsyntax with DOTALL and MULTILINE) to search for."
+          },
+          "repl": {
+            "title": "Repl",
+            "type": "string",
+            "description": "The replacement string. In regex mode, backreferences to matched groups can be\nspecified as $!1, $!2, etc."
+          },
+          "mode": {
+            "enum": [
+              "literal",
+              "regex"
+            ],
+            "title": "Mode",
+            "type": "string",
+            "description": "Either \"literal\" or \"regex\", specifying how `needle` is to be interpreted."
+          },
+          "relative_path": {
+            "default": "",
+            "title": "Relative Path",
+            "type": "string",
+            "description": "Only consider this file or directory (default: the whole project)."
+          },
+          "paths_include_glob": {
+            "default": "",
+            "title": "Paths Include Glob",
+            "type": "string",
+            "description": "Optional glob (relative to the project root, e.g. \"src/**/*.java\")\nrestricting which files are considered."
+          },
+          "paths_exclude_glob": {
+            "default": "",
+            "title": "Paths Exclude Glob",
+            "type": "string",
+            "description": "Optional glob of files to exclude; takes precedence over the include glob."
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean",
+            "description": "If True, do not modify anything; return the prospective changes as a list of\ndiffs with occurrence ids."
+          },
+          "occurrence_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Occurrence Ids",
+            "description": "Optional list of occurrence ids (obtained from a dry run) to which the\nreplacement is restricted; if any id is unknown or stale, NOTHING is changed. If omitted,\nall occurrences are replaced."
+          },
+          "expected_count": {
+            "default": -1,
+            "title": "Expected Count",
+            "type": "integer",
+            "description": "Optional guard for calls without occurrence_ids: the number of\noccurrences you expect to be replaced. If the actual count differs, nothing is changed and\nthe list of prospective changes is returned. -1 disables the guard."
+          },
+          "max_answer_chars": {
+            "default": -1,
+            "title": "Max Answer Chars",
+            "type": "integer",
+            "description": "If the output exceeds this many characters, a shortened version is\nreturned. -1 uses the configured default."
           }
         },
         "required": [
-          "result"
+          "needle",
+          "repl",
+          "mode"
         ],
-        "title": "applyOutput",
+        "title": "applyArguments",
         "type": "object"
       },
       "annotations": {
-        "title": "Replace Content",
+        "title": "Replace In Files",
         "readOnlyHint": false,
         "destructiveHint": true
       }
@@ -95,19 +174,6 @@
           "body"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -146,19 +212,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Insert After Symbol",
         "readOnlyHint": false,
@@ -195,19 +248,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Insert Before Symbol",
         "readOnlyHint": false,
@@ -226,10 +266,10 @@
             "description": "The relative path to the file to get the overview of."
           },
           "depth": {
-            "default": 0,
+            "default": -1,
             "title": "Depth",
             "type": "integer",
-            "description": "Depth up to which descendants of top-level symbols shall be retrieved\n(e.g. 1 retrieves immediate children). Default 0."
+            "description": "Depth up to which descendants shall be retrieved.\nDefault (-1) results in a language specific choice: 1 for java and kotlin and 0 for other languages."
           },
           "max_answer_chars": {
             "default": -1,
@@ -242,19 +282,6 @@
           "relative_path"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -341,19 +368,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Find Symbol",
         "readOnlyHint": true,
@@ -374,7 +388,7 @@
           "relative_path": {
             "title": "Relative Path",
             "type": "string",
-            "description": "The relative path to the file containing the symbol for which to find references.\nNote: for external dependencies, this must be an identifier starting with `<ext` that you have received\nearlier (don't try to guess!)."
+            "description": "The relative path to the file containing the symbol for which to find references."
           },
           "include_kinds": {
             "default": [],
@@ -406,19 +420,6 @@
           "relative_path"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -481,19 +482,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Find Implementations",
         "readOnlyHint": true,
@@ -549,19 +537,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Find Declaration",
         "readOnlyHint": true,
@@ -610,19 +585,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Get Diagnostics For File",
         "readOnlyHint": true,
@@ -659,19 +621,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Rename Symbol",
         "readOnlyHint": false,
@@ -700,19 +649,6 @@
           "relative_path"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -751,19 +687,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Write Memory",
         "readOnlyHint": false,
@@ -787,19 +710,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Read Memory",
         "readOnlyHint": true,
@@ -819,19 +729,6 @@
           }
         },
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -855,19 +752,6 @@
           "memory_name"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -896,19 +780,6 @@
           "new_name"
         ],
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
@@ -963,19 +834,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Edit Memory",
         "readOnlyHint": false,
@@ -991,19 +849,6 @@
         "title": "applyArguments",
         "type": "object"
       },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
-        "type": "object"
-      },
       "annotations": {
         "title": "Onboarding",
         "readOnlyHint": true,
@@ -1017,19 +862,6 @@
       "inputSchema": {
         "properties": {},
         "title": "applyArguments",
-        "type": "object"
-      },
-      "outputSchema": {
-        "properties": {
-          "result": {
-            "title": "Result",
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "title": "applyOutput",
         "type": "object"
       },
       "annotations": {
