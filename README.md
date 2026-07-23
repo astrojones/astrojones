@@ -89,3 +89,4 @@ claude --plugin-dir /path/to/astrojones    # test before publishing
 
 The plugin index lives in [`astrojones/claude-plugins`](https://github.com/astrojones/claude-plugins);
 this repo is just the plugin.
+
