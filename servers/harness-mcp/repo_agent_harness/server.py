@@ -415,7 +415,9 @@ def repo_search_files(
 
 @mcp.tool()
 def repo_read_range(
-    path: Annotated[str, Field(description="Repo-relative file path")],
+    path: Annotated[
+        str, Field(description="Repo-relative file path", validation_alias=AliasChoices("path", "relative_path"))
+    ],
     start_line: Annotated[int, Field(ge=1, validation_alias=AliasChoices("start_line", "start"))] = 1,
     end_line: Annotated[int, Field(ge=1, validation_alias=AliasChoices("end_line", "end"))] = 200,
 ) -> dict:

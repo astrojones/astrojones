@@ -259,3 +259,10 @@ def test_repo_tools_accept_param_aliases(repo, monkeypatch):
     assert _run_tool("repo_search_text", {"query": "charge"}) == _run_tool("repo_search_text", {"pattern": "charge"})
     # repo_search_files: glob -> pattern
     assert _run_tool("repo_search_files", {"glob": "*.py"}) == _run_tool("repo_search_files", {"pattern": "*.py"})
+
+
+def test_repo_read_range_accepts_relative_path_alias(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    assert _run_tool(
+        "repo_read_range", {"relative_path": "pyproject.toml", "start_line": 1, "end_line": 2}
+    ) == _run_tool("repo_read_range", {"path": "pyproject.toml", "start_line": 1, "end_line": 2})
