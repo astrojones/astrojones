@@ -1,4 +1,9 @@
 
+## 2026-07-23 — „latest Action läuft noch auf node20" = tot, ersetzen (nicht bumpen)
+- Heuristik (User): Wenn die NEUESTE released Version einer GitHub-Action in `action.yml` noch `runs.using: node20` (oder älter) deklariert, ist die Action faktisch tot/unmaintained → ERSETZEN, nicht bloß auf den neuesten Tag pinnen. GitHub zwingt node20-Actions übergangsweise auf node24 (läuft, aber latenter Break).
+- Konkret: `mathieudutour/github-tag-action` latest `v6.2` = node20 (`v6.1` node16), keine node24-Version → ersetzen (inline `git tag` + `gh release` mit Conventional-Commit-Semver, oder gepflegte node24-Alternative), nicht bumpen.
+- Regel beim Actions-Audit off-node20: „ist latest" reicht NICHT; immer `runs.using` gegen die `action.yml` prüfen. latest==node20 → als Replace-Kandidat flaggen. (Gegenbeispiel same session: `setup-uv` v6 war node20, erst v7+ node24; deshalb nie auf „neuester Major" verlassen, sondern Runtime verifizieren.)
+
 ## 2026-07-18 — SSH-Alias + Dev-Target
 - Für jonaheidsick.de/nuroot-prod immer `ssh jhj` verwenden (User-Korrektur; nicht `jh`, nicht Raw-IP — Raw-IP wird zudem vom Permission-Classifier geblockt).
 - Entwickeln/Testen der cognee-Memory-Fixes gegen das LOKALE Repo + lokalen cognee-Container (`cognee_local.py`), nicht gegen bartix.de. Prod nur für Deploy + Verify-Probes.
@@ -19,3 +24,4 @@
 ## 2026-07-16 — serena_replace_symbol_body frisst Dekoratoren
 - Zweimal in einer Session: `serena_replace_symbol_body` ersetzte einen Funktionskörper und ließ den Dekorator weg (`@functools.lru_cache` auf `_secrets_cfg`; `@mcp.tool()` auf `mem_rules` — letzteres deregistrierte das MCP-Tool lautlos, Suite blieb grün). Regel: nach jedem Symbol-Body-Edit die Zeilen direkt über der Signatur gegenprüfen; für MCP-Tools Registrierung per Test pinnen (`test_tools_registered`).
 - Folge-Regel: Tests, die das Container-Entrypoint-Skript selbst ausführen, brauchen einen In-Container-Skip (`/.dockerenv`/`/run/.containerenv`) — sonst Rekursion test.sh → pytest → test.sh im Image.
+- UPDATE 2026-07-23: systemisch gefixt statt „nach jedem Edit manuell prüfen" — der Gateway-Proxy stellt jetzt in `_ProxiedSerenaTool.run` für `replace_symbol_body` gedroppte Dekoratoren wieder her (holt den aktuellen Body via `find_symbol`, re-prepend'et den führenden `@`-Block, sprach-agnostisch py/ts/js/java/kt/scala, self-activating + fail-open). Regressionstests in `test_gateway.py`.
