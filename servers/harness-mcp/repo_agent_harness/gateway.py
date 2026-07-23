@@ -1073,6 +1073,100 @@ class SerenaGateway:
             await self._discard_locked()
 
 
+_PY_DECORATED_SUFFIXES = frozenset({".py", ".pyi"})
+_DEF_START_KEYWORDS = ("def ", "async def ", "class ")
+
+
+def _leading_decorator_lines(body: str) -> list[str]:
+    """Return the leading ``@decorator`` block of a Python symbol body (``[]`` when none).
+
+    The block is every line before the first line whose stripped form starts a def/async
+    def/class — so multi-line decorators (whose continuation lines don't begin with ``@``) are
+    captured whole. Returns ``[]`` unless that prefix exists and its first line is a decorator.
+    """
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(_DEF_START_KEYWORDS):
+            return lines[:i] if i and lines[0].lstrip().startswith("@") else []
+    return []
+
+
+def _restore_dropped_decorators(current_body: str, new_body: str) -> str | None:
+    """New body that re-adds decorators Serena's swap would drop, or ``None`` to leave it unchanged.
+
+    Serena's replace span for a decorated symbol covers its decorator lines, so a ``body`` that
+    omits them silently deletes the decorators. When the current symbol has a leading decorator
+    block and the replacement carries none of its own, re-prepend the current decorators.
+    """
+    current_decorators = _leading_decorator_lines(current_body)
+    if not current_decorators or _leading_decorator_lines(new_body):
+        return None  # nothing to preserve, or the replacement already brings its own decorators
+    return "\n".join(current_decorators) + "\n" + new_body
+
+
+def _first_symbol_body(payload: object) -> str | None:
+    """First symbol ``body`` string in a find_symbol payload (dict, ``{"result": [...]}``, or list)."""
+    if isinstance(payload, dict):
+        body = payload.get("body")
+        if isinstance(body, str):
+            return body
+        payload = payload.get("result")
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                body = item.get("body")
+                if isinstance(body, str):
+                    return body
+    return None
+
+
+async def _current_symbol_body(gw: SerenaGateway, name_path: str, relative_path: str) -> str | None:
+    """Best-effort current body of ``name_path`` in ``relative_path`` via Serena find_symbol.
+
+    Fails open (``None``) on any error or miss — decorator preservation must never block or break
+    an edit.
+    """
+    try:
+        result = await gw.call(
+            "find_symbol",
+            {"name_path_pattern": name_path, "relative_path": relative_path, "include_body": True, "depth": 0},
+        )
+    except Exception:  # noqa: BLE001 — fail open: preservation must never break replace_symbol_body
+        return None
+    if getattr(result, "isError", False):
+        return None
+    body = _first_symbol_body(getattr(result, "structuredContent", None))
+    if body is not None:
+        return body
+    text = "".join(
+        getattr(c, "text", "") for c in (getattr(result, "content", None) or []) if getattr(c, "type", "") == "text"
+    )
+    try:
+        return _first_symbol_body(json.loads(text)) if text else None
+    except ValueError:
+        return None
+
+
+async def _preserve_symbol_decorators(gw: SerenaGateway, arguments: dict) -> dict:
+    """Restore decorators a replace_symbol_body would silently drop, else return arguments unchanged.
+
+    Scoped to Python (.py/.pyi); returns the arguments untouched on any missing field, non-Python
+    target, lookup miss, or when the replacement already carries its own decorators.
+    """
+    body = arguments.get("body")
+    name_path = arguments.get("name_path")
+    relative_path = arguments.get("relative_path")
+    if not (isinstance(body, str) and isinstance(name_path, str) and isinstance(relative_path, str)):
+        return arguments
+    if Path(relative_path).suffix.lower() not in _PY_DECORATED_SUFFIXES:
+        return arguments
+    current_body = await _current_symbol_body(gw, name_path, relative_path)
+    if current_body is None:
+        return arguments
+    merged = _restore_dropped_decorators(current_body, body)
+    return {**arguments, "body": merged} if merged is not None else arguments
+
+
 class _ProxiedSerenaTool(Tool):
     """A snapshot-defined tool whose run() forwards to the gateway, result passed through verbatim."""
 
@@ -1085,7 +1179,9 @@ class _ProxiedSerenaTool(Tool):
         First normalize common alias parameter names to Serena's real fields, then consult the
         per-file capability gate: a tool whose underlying LSP method is unsupported for the target
         file's language (e.g. find_implementations on Python, which Pyright does not implement) is
-        refused here — before connecting — with a redirect message.
+        refused here — before connecting — with a redirect message. Finally, for replace_symbol_body
+        on a Python target, re-attach any decorators the swap would otherwise silently drop (Serena's
+        replace span covers the decorator lines).
         """
         arguments = _normalize_arguments(arguments, self._aliases)
         bare = self.name.removeprefix(TOOL_PREFIX)
@@ -1094,6 +1190,8 @@ class _ProxiedSerenaTool(Tool):
             refusal = gate(arguments.get("relative_path", ""))
             if refusal is not None:
                 return ToolResult(content=[types.TextContent(type="text", text=refusal)], is_error=True)
+        if bare == "replace_symbol_body" and not serena_gate.gate_disabled():
+            arguments = await _preserve_symbol_decorators(self._gateway, arguments)
         result = await self._gateway.call(bare, arguments)
         return ToolResult(
             content=result.content,

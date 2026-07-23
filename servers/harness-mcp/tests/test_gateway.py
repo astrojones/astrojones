@@ -550,6 +550,107 @@ async def test_capability_gate_honors_disable_env(repo, monkeypatch):
         await gw.aclose()
 
 
+# ---------------------------------------------------------------- decorator preservation
+
+
+def test_leading_decorator_lines():
+    assert gateway._leading_decorator_lines("@d\ndef f():\n    pass\n") == ["@d"]
+    assert gateway._leading_decorator_lines("@a\n@b\ndef f():\n    pass\n") == ["@a", "@b"]
+    # A multi-line decorator (continuation lines don't start with @) is captured whole.
+    body = "@app.route(\n    '/x',\n)\ndef f():\n    pass\n"
+    assert gateway._leading_decorator_lines(body) == ["@app.route(", "    '/x',", ")"]
+    # Undecorated def/class -> no block.
+    assert gateway._leading_decorator_lines("def f():\n    pass\n") == []
+    assert gateway._leading_decorator_lines("class C:\n    pass\n") == []
+
+
+def test_restore_dropped_decorators():
+    # Current has a decorator the new body omits -> re-prepended.
+    assert (
+        gateway._restore_dropped_decorators("@d\ndef f():\n    return 1\n", "def f():\n    return 2\n")
+        == "@d\ndef f():\n    return 2\n"
+    )
+    # New body already carries a decorator -> left alone.
+    assert gateway._restore_dropped_decorators("@d\ndef f():\n    x\n", "@e\ndef f():\n    y\n") is None
+    # Current is undecorated -> nothing to preserve.
+    assert gateway._restore_dropped_decorators("def f():\n    x\n", "def f():\n    y\n") is None
+
+
+def _body_recorder(current_body, forwarded):
+    """A duck-typed gateway: answers find_symbol with ``current_body``, records the replace call."""
+
+    class _Recorder:
+        async def call(self, name: str, arguments: dict):
+            if name == "find_symbol":
+                payload = {"result": [{"body": current_body}]} if current_body is not None else {}
+                return SimpleNamespace(content=[], structuredContent=payload, isError=False)
+            forwarded["name"] = name
+            forwarded["arguments"] = arguments
+            return SimpleNamespace(content=[], structuredContent={}, isError=False)
+
+    return _Recorder()
+
+
+def _replace_tool(gw):
+    return next(t for t in gateway.proxied_tools(gw) if t.name == "serena_replace_symbol_body")
+
+
+async def test_replace_symbol_body_reattaches_dropped_decorator():
+    """The reported bug: a body-swap that omits the decorator has it restored before forwarding."""
+    forwarded: dict = {}
+    tool = _replace_tool(_body_recorder("@decorator\ndef foo():\n    return 1\n", forwarded))
+    await tool.run({"name_path": "foo", "relative_path": "m.py", "body": "def foo():\n    return 2\n"})
+    assert forwarded["name"] == "replace_symbol_body"
+    assert forwarded["arguments"]["body"] == "@decorator\ndef foo():\n    return 2\n"
+
+
+async def test_replace_symbol_body_respects_agent_decorators():
+    """A new body that brings its own decorators is forwarded verbatim (no doubling)."""
+    forwarded: dict = {}
+    tool = _replace_tool(_body_recorder("@old\ndef foo():\n    return 1\n", forwarded))
+    new = "@new\ndef foo():\n    return 2\n"
+    await tool.run({"name_path": "foo", "relative_path": "m.py", "body": new})
+    assert forwarded["arguments"]["body"] == new
+
+
+async def test_replace_symbol_body_undecorated_untouched():
+    """No decorator on the current symbol -> body forwarded unchanged."""
+    forwarded: dict = {}
+    tool = _replace_tool(_body_recorder("def foo():\n    return 1\n", forwarded))
+    new = "def foo():\n    return 2\n"
+    await tool.run({"name_path": "foo", "relative_path": "m.py", "body": new})
+    assert forwarded["arguments"]["body"] == new
+
+
+async def test_replace_symbol_body_skips_non_python():
+    """Non-Python targets never consult find_symbol for the Python decorator logic."""
+    calls: list[str] = []
+
+    class _Recorder:
+        async def call(self, name: str, arguments: dict):
+            calls.append(name)
+            return SimpleNamespace(content=[], structuredContent={}, isError=False)
+
+    tool = _replace_tool(_Recorder())
+    await tool.run({"name_path": "Foo", "relative_path": "m.ts", "body": "class Foo {}"})
+    assert calls == ["replace_symbol_body"]
+
+
+async def test_replace_symbol_body_preservation_honors_disable_env(monkeypatch):
+    """With the gate disabled, replace_symbol_body is raw passthrough (no find_symbol lookup)."""
+    monkeypatch.setenv(serena_gate.GATE_ENV, "1")
+    calls: list[str] = []
+
+    class _Recorder:
+        async def call(self, name: str, arguments: dict):
+            calls.append(name)
+            return SimpleNamespace(content=[], structuredContent={}, isError=False)
+
+    tool = _replace_tool(_Recorder())
+    await tool.run({"name_path": "foo", "relative_path": "m.py", "body": "def foo():\n    return 2\n"})
+    assert calls == ["replace_symbol_body"]
+
+
 # ------------------------------------------------------------------------- health glue
 
 
