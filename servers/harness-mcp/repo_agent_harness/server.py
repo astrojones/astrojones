@@ -17,7 +17,7 @@ import json
 import logging
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, override
+from typing import TYPE_CHECKING, Annotated, Literal, override
 
 import anyio
 import yaml
@@ -708,8 +708,19 @@ def repo_deploy_logs(
 
 
 @mcp.tool()
-async def mem_search(inp: models.MemSearchIn) -> dict:
+async def mem_search(
+    query: Annotated[str, Field(description="Natural-language query against the memory graph")],
+    search_type: Annotated[
+        Literal["GRAPH_COMPLETION", "CHUNKS", "TEMPORAL", "CODING_RULES"], Field(description="Retrieval mode")
+    ] = "GRAPH_COMPLETION",
+    dataset: Annotated[str | None, Field(description="Dataset name; None = the user's default scope")] = None,
+    node_name: Annotated[
+        list[str] | None, Field(description="Restrict to these node_set tags (belongs_to_set filter)")
+    ] = None,
+    top_k: Annotated[int, Field(ge=1, le=50)] = 10,
+) -> dict:
     """Recall from the durable memory graph (remote cognee)."""
+    inp = models.MemSearchIn(query=query, search_type=search_type, dataset=dataset, node_name=node_name, top_k=top_k)
     return (await mem.search(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
@@ -724,26 +735,60 @@ async def mem_rules(
 
 
 @mcp.tool()
-async def mem_remember(inp: models.MemRememberIn) -> dict:
+async def mem_remember(
+    text: Annotated[str, Field(description="The fact/observation to store durably")],
+    dataset: Annotated[
+        str | None,
+        Field(description="Target dataset name; None resolves via the conventions table (mem.resolve_dataset)"),
+    ] = None,
+    node_set: Annotated[list[str] | None, Field(description="Category tags, e.g. ['project_docs']")] = None,
+    metadata: Annotated[dict | None, Field(description="Optional key/value context folded into the text")] = None,
+) -> dict:
     """Store one fact durably: fast /add, then background /cognify (never blocks on extraction)."""
+    inp = models.MemRememberIn(text=text, dataset=dataset, node_set=node_set, metadata=metadata)
     return (await mem.remember(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_ingest(inp: models.MemIngestIn) -> dict:
+async def mem_ingest(  # noqa: PLR0913, PLR0917 -- mirrors MemIngestIn's field count 1:1
+    items: Annotated[list[str], Field(description="Curated documents to ingest")],
+    dataset: Annotated[
+        str | None, Field(description="Target dataset name; None resolves to the repo's onboarded dataset")
+    ] = None,
+    node_set: Annotated[list[str] | None, Field(description="Category tags applied to every item")] = None,
+    ontology_key: Annotated[
+        str | None, Field(description="pinned ontology key from mem_ontology; extraction uses this OWL vocabulary")
+    ] = None,
+    dry_run: Annotated[bool, Field(description="Only return the cost estimate; write nothing")] = False,
+    confirm: Annotated[bool, Field(description="Accept an over-limit estimated cost")] = False,
+) -> dict:
     """Bulk-ingest curated items — cost-gated (refuses expensive runs unless confirm=true)."""
+    inp = models.MemIngestIn(
+        items=items,
+        dataset=dataset,
+        node_set=node_set,
+        ontology_key=ontology_key,
+        dry_run=dry_run,
+        confirm=confirm,
+    )
     return (await mem.ingest(inp, root=git.repo_root())).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_stats(inp: models.MemStatsIn) -> dict:
+async def mem_stats(
+    dataset: Annotated[str, Field(description="Dataset name to report on")],
+) -> dict:
     """Best-effort dataset stats (existence, pipeline status); honest about unsupported counts."""
+    inp = models.MemStatsIn(dataset=dataset)
     return (await mem.stats(inp)).model_dump(exclude_none=True)
 
 
 @mcp.tool()
-async def mem_ontology(inp: models.MemOntologyIn) -> dict:
+async def mem_ontology(
+    individuals: Annotated[dict[str, str], Field(description="Mapping of individual name -> fixed type")],
+) -> dict:
     """Generate + idempotently upload a NamedIndividual ontology; returns the paired extraction prompt."""
+    inp = models.MemOntologyIn(individuals=individuals)
     return (await mem.ontology(inp)).model_dump(exclude_none=True)
 
 

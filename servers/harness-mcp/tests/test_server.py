@@ -284,3 +284,15 @@ def test_symbols_overview_accepts_flat_params(repo, monkeypatch):
     monkeypatch.chdir(repo)
     out = _run_tool("repo_symbols_overview", {"path": "src", "limit": 50})
     assert "symbols" in out and "error" not in out
+
+
+def test_mem_tools_schemas_are_flat():
+    import asyncio
+
+    async def props(name: str) -> set[str]:
+        return set((await server.mcp.get_tool(name)).parameters.get("properties", {}))
+
+    assert "inp" not in asyncio.run(props("mem_search"))
+    assert {"query", "search_type", "dataset", "top_k"} <= asyncio.run(props("mem_search"))
+    for name in ("mem_remember", "mem_ingest", "mem_stats", "mem_ontology"):
+        assert "inp" not in asyncio.run(props(name)), name
