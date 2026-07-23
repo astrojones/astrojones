@@ -75,28 +75,44 @@ jobs:
         working-directory: servers/harness-mcp
         run: uv run pytest -q
 
+      # Third-party PR actions (peter-evans/*) are blocked by the org's action allowlist, so the
+      # branch + PR are managed with the pre-installed gh CLI and git instead.
       - name: Open or update the update PR
         if: steps.check.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: chore/serena-update
-          delete-branch: true
-          base: main
-          add-paths: |
-            servers/harness-mcp/pyproject.toml
-            servers/harness-mcp/repo_agent_harness/gateway.py
-            servers/harness-mcp/repo_agent_harness/serena_tools.json
-            servers/harness-mcp/uv.lock
-          commit-message: "chore(serena): bump pinned Serena to ${{ steps.check.outputs.latest_short }}"
-          title: "chore(serena): update pinned Serena to ${{ steps.check.outputs.latest_short }}"
-          labels: dependencies
-          draft: ${{ steps.test.outcome == 'failure' }}
-          body: |
-            Automated weekly Serena update.
-
-            - **From:** `${{ steps.check.outputs.current }}`
-            - **To:** `${{ steps.check.outputs.latest }}` (`oraios/serena@main`)
-            - Regenerated `serena_tools.json` against the new Serena, and re-synced `uv.lock`.
-            - Suite result: **${{ steps.test.outcome }}** — a `failure` opens this as a draft; review the Serena changelog before merging.
-
-            Merging to `main` triggers the normal release flow.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD: ${{ steps.check.outputs.current }}
+          NEW: ${{ steps.check.outputs.latest }}
+          SHORT: ${{ steps.check.outputs.latest_short }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          set -euo pipefail
+          branch=chore/serena-update
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git add servers/harness-mcp/pyproject.toml \
+                  servers/harness-mcp/repo_agent_harness/gateway.py \
+                  servers/harness-mcp/repo_agent_harness/serena_tools.json \
+                  servers/harness-mcp/uv.lock
+          git commit -m "chore(serena): bump pinned Serena to ${SHORT}"
+          git push --force origin "$branch"
+          {
+            echo "Automated weekly Serena update."
+            echo
+            echo "- From: ${OLD}"
+            echo "- To:   ${NEW} (oraios/serena@main)"
+            echo "- Regenerated serena_tools.json against the new Serena, and re-synced uv.lock."
+            echo "- Suite result: ${TEST_OUTCOME} (a failure opens this as a draft; review the Serena changelog before merging)."
+            echo
+            echo "Merging to main triggers the normal release flow."
+          } > "${RUNNER_TEMP}/pr-body.md"
+          title="chore(serena): update pinned Serena to ${SHORT}"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            gh pr edit "$branch" --title "$title" --body-file "${RUNNER_TEMP}/pr-body.md"
+          else
+            draft=""
+            [ "${TEST_OUTCOME}" = "failure" ] && draft="--draft"
+            gh pr create --base main --head "$branch" --title "$title" \
+              --body-file "${RUNNER_TEMP}/pr-body.md" ${draft}
+          fi
