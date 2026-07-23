@@ -23,7 +23,7 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve current and latest Serena SHA
         id: check
@@ -54,7 +54,7 @@ jobs:
 
       - name: Set up uv + Python
         if: steps.check.outputs.changed == 'true'
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
 
