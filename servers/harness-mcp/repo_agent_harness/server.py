@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Annotated, override
 
 import anyio
 import yaml
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 try:
     from fastmcp import FastMCP
@@ -388,8 +388,12 @@ def repo_context_relevant_files(
 
 @mcp.tool()
 def repo_search_text(
-    pattern: Annotated[str, Field(description="Substring or ripgrep pattern")],
-    paths: Annotated[list[str] | None, Field(description="Optional path scope")] = None,
+    pattern: Annotated[
+        str, Field(description="Substring or ripgrep pattern", validation_alias=AliasChoices("pattern", "query"))
+    ],
+    paths: Annotated[
+        list[str] | None, Field(description="Optional path scope", validation_alias=AliasChoices("paths", "path"))
+    ] = None,
     limit: Annotated[int, Field(ge=1, le=200)] = 20,
 ) -> dict:
     """Search file contents (ripgrep). Secret-redacted, secret paths skipped, result-limited."""
@@ -399,7 +403,9 @@ def repo_search_text(
 
 @mcp.tool()
 def repo_search_files(
-    pattern: Annotated[str, Field(description="Glob, e.g. '*.py' or 'src/*'")],
+    pattern: Annotated[
+        str, Field(description="Glob, e.g. '*.py' or 'src/*'", validation_alias=AliasChoices("pattern", "glob", "path"))
+    ],
     limit: Annotated[int, Field(ge=1, le=200)] = 20,
 ) -> dict:
     """Find tracked files by glob (git ls-files); ignored files excluded."""
@@ -410,8 +416,8 @@ def repo_search_files(
 @mcp.tool()
 def repo_read_range(
     path: Annotated[str, Field(description="Repo-relative file path")],
-    start_line: Annotated[int, Field(ge=1)] = 1,
-    end_line: Annotated[int, Field(ge=1)] = 200,
+    start_line: Annotated[int, Field(ge=1, validation_alias=AliasChoices("start_line", "start"))] = 1,
+    end_line: Annotated[int, Field(ge=1, validation_alias=AliasChoices("end_line", "end"))] = 200,
 ) -> dict:
     """Read a bounded line range. Refuses secrets/binaries; blocks path traversal; line-capped.
 

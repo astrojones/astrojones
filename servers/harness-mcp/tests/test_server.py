@@ -220,3 +220,42 @@ def test_lifespan_skips_cognee_when_disabled(monkeypatch):
     monkeypatch.setenv("REPO_AGENT_HARNESS_COGNEE_ENABLE", "1")
     asyncio.run(_drive())
     assert calls == [1]
+
+
+# ---------------------------------------------------------------------- param aliases
+
+
+def _run_tool(name: str, args: dict) -> dict:
+    import asyncio
+
+    async def go() -> dict:
+        tool = await server.mcp.get_tool(name)
+        return (await tool.run(args)).structured_content
+
+    return asyncio.run(go())
+
+
+def test_repo_tool_schemas_advertise_only_canonical_names():
+    """The published schema keeps the canonical field names — aliases are input-only sugar."""
+    import asyncio
+
+    async def props(name: str) -> set[str]:
+        return set((await server.mcp.get_tool(name)).parameters.get("properties", {}))
+
+    assert asyncio.run(props("repo_read_range")) == {"path", "start_line", "end_line"}
+    text = asyncio.run(props("repo_search_text"))
+    assert "query" not in text and "pattern" in text
+    assert "glob" not in asyncio.run(props("repo_search_files"))
+
+
+def test_repo_tools_accept_param_aliases(repo, monkeypatch):
+    """Agents' natural guesses (start/end, query, glob) route to the canonical field via run()."""
+    monkeypatch.chdir(repo)
+    # repo_read_range: start/end -> start_line/end_line (pyproject.toml is non-code, always readable)
+    assert _run_tool("repo_read_range", {"path": "pyproject.toml", "start": 1, "end": 2}) == _run_tool(
+        "repo_read_range", {"path": "pyproject.toml", "start_line": 1, "end_line": 2}
+    )
+    # repo_search_text: query -> pattern
+    assert _run_tool("repo_search_text", {"query": "charge"}) == _run_tool("repo_search_text", {"pattern": "charge"})
+    # repo_search_files: glob -> pattern
+    assert _run_tool("repo_search_files", {"glob": "*.py"}) == _run_tool("repo_search_files", {"pattern": "*.py"})

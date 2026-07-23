@@ -88,6 +88,51 @@ _HARD_KILL_GRACE_SECONDS = 0.5
 TOOL_PREFIX = "serena_"
 _SNAPSHOT_NAME = "serena_tools.json"
 
+# Common wrong parameter names agents reach for, mapped to Serena's real upstream field.
+# Serena's schemas are mirrored verbatim from upstream (proxied, not redeclared), so we cannot
+# rename the fields; instead we accept the natural guess at the proxy boundary. The canonical
+# example: agents call serena_find_symbol with ``name_path`` (the term the prose description uses)
+# rather than the schema's ``name_path_pattern`` and hit a validation error. Applied only when the
+# canonical field exists on the target tool and the alias does not (see _alias_map_for), so a
+# rewrite can never shadow a real parameter nor forward an argument the tool does not declare.
+_SERENA_ARG_ALIASES: dict[str, str] = {
+    "name_path": "name_path_pattern",
+    "path": "relative_path",
+    "file_path": "relative_path",
+    "file": "relative_path",
+}
+
+
+def _alias_map_for(input_schema: dict | None) -> dict[str, str]:
+    """Narrow the global alias table to the fields this tool actually declares.
+
+    Keeps an ``alias -> canonical`` entry only when the tool declares ``canonical`` and does not
+    declare ``alias``. Gating on the tool's own inputSchema guarantees normalization never injects
+    an unknown field nor overrides a parameter the tool genuinely defines.
+    """
+    props = (input_schema or {}).get("properties", {}) or {}
+    return {
+        alias: canonical
+        for alias, canonical in _SERENA_ARG_ALIASES.items()
+        if canonical in props and alias not in props
+    }
+
+
+def _normalize_arguments(arguments: dict, aliases: dict[str, str]) -> dict:
+    """Rewrite known alias keys to their canonical field, non-destructively.
+
+    When both the alias and its canonical field are present the explicit canonical value wins and
+    the alias is dropped, so the forwarded arguments never carry a field Serena would reject.
+    """
+    if not aliases:
+        return arguments
+    out = dict(arguments)
+    for alias, canonical in aliases.items():
+        if alias in out:
+            value = out.pop(alias)
+            out.setdefault(canonical, value)
+    return out
+
 
 def serena_spec() -> str:
     """Return the Serena git provenance spec recorded in the snapshot.
@@ -1024,14 +1069,17 @@ class _ProxiedSerenaTool(Tool):
     """A snapshot-defined tool whose run() forwards to the gateway, result passed through verbatim."""
 
     _gateway: SerenaGateway = PrivateAttr()
+    _aliases: dict[str, str] = PrivateAttr(default_factory=dict)
 
     async def run(self, arguments: dict) -> ToolResult:
         """Forward to Serena and map the raw CallToolResult 1:1 (content, structured, is_error).
 
-        First consult the per-file capability gate: a tool whose underlying LSP method is
-        unsupported for the target file's language (e.g. find_implementations on Python, which
-        Pyright does not implement) is refused here — before connecting — with a redirect message.
+        First normalize common alias parameter names to Serena's real fields, then consult the
+        per-file capability gate: a tool whose underlying LSP method is unsupported for the target
+        file's language (e.g. find_implementations on Python, which Pyright does not implement) is
+        refused here — before connecting — with a redirect message.
         """
+        arguments = _normalize_arguments(arguments, self._aliases)
         bare = self.name.removeprefix(TOOL_PREFIX)
         gate = serena_gate.capability_gate_for(bare)
         if gate is not None and not serena_gate.gate_disabled():
@@ -1080,6 +1128,7 @@ def proxied_tools(gw: SerenaGateway) -> list[Tool]:
             output_schema=entry.get("outputSchema"),
         )
         tool._gateway = gw
+        tool._aliases = _alias_map_for(entry.get("inputSchema"))
         tools.append(tool)
     return tools
 

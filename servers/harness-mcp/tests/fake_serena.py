@@ -25,11 +25,16 @@ def initial_instructions() -> str:
 
 
 @mcp.tool()
-def find_symbol(name_path: str) -> dict:
-    """Echo the requested symbol path (``result`` mirrors the real Serena output contract)."""
+def find_symbol(name_path: str = "", name_path_pattern: str = "") -> dict:
+    """Echo the requested symbol path (``result`` mirrors the real Serena output contract).
+
+    Accepts both the legacy ``name_path`` (used by direct gateway-call tests) and the real
+    upstream field ``name_path_pattern`` (what the proxy forwards after alias normalization).
+    """
     if _wedged:
         time.sleep(3600)
-    return {"echo": name_path, "result": name_path}
+    value = name_path or name_path_pattern
+    return {"echo": value, "result": value}
 
 
 @mcp.tool()

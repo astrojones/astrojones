@@ -50,6 +50,54 @@ def test_proxied_tools_do_not_connect(repo):
     assert {"serena_find_symbol", "serena_get_diagnostics_for_file", "serena_onboarding"} <= {t.name for t in tools}
 
 
+# ---------------------------------------------------------------------- arg aliases
+
+
+def test_alias_map_is_gated_by_tool_schema():
+    # canonical present, alias absent -> alias is active
+    active = gateway._alias_map_for({"properties": {"name_path_pattern": {}, "relative_path": {}}})
+    assert active == {
+        "name_path": "name_path_pattern",
+        "path": "relative_path",
+        "file_path": "relative_path",
+        "file": "relative_path",
+    }
+    # canonical absent -> alias dropped (never inject an unknown field)
+    assert gateway._alias_map_for({"properties": {"depth": {}}}) == {}
+    # alias name is itself a real field -> never shadow the genuine parameter
+    assert "path" not in gateway._alias_map_for({"properties": {"relative_path": {}, "path": {}}})
+    # missing / empty schema tolerated
+    assert gateway._alias_map_for(None) == {}
+
+
+def test_normalize_arguments_rewrites_and_dedupes():
+    aliases = {"name_path": "name_path_pattern"}
+    assert gateway._normalize_arguments({"name_path": "Foo"}, aliases) == {"name_path_pattern": "Foo"}
+    # explicit canonical wins when both are supplied; the alias is never forwarded
+    both = gateway._normalize_arguments({"name_path": "A", "name_path_pattern": "B"}, aliases)
+    assert both == {"name_path_pattern": "B"}
+    # no aliases -> identity, same object (zero-copy fast path)
+    original = {"x": 1}
+    assert gateway._normalize_arguments(original, {}) is original
+
+
+async def test_proxied_tool_normalizes_alias_before_forwarding():
+    """serena_find_symbol called with the natural ``name_path`` reaches Serena as ``name_path_pattern``."""
+    forwarded: dict = {}
+
+    class _Recorder:
+        async def call(self, name: str, arguments: dict):
+            forwarded["name"] = name
+            forwarded["arguments"] = arguments
+            return SimpleNamespace(content=[], structuredContent={}, isError=False)
+
+    tools = {t.name: t for t in gateway.proxied_tools(_Recorder())}
+    await tools["serena_find_symbol"].run({"name_path": "ConstraintGroup", "include_body": True})
+    assert forwarded["name"] == "find_symbol"
+    assert "name_path" not in forwarded["arguments"]
+    assert forwarded["arguments"] == {"name_path_pattern": "ConstraintGroup", "include_body": True}
+
+
 # ------------------------------------------------------------------------ forwarding
 
 
