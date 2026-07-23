@@ -6,7 +6,6 @@ __pycache__/
 .ruff_cache/
 .coverage
 .coverage.*
-uv.lock
 .DS_Store
 
 # local Claude Code session state
