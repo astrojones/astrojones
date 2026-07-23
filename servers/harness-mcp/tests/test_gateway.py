@@ -70,6 +70,23 @@ def test_alias_map_is_gated_by_tool_schema():
     assert gateway._alias_map_for(None) == {}
 
 
+def test_alias_map_reverse_name_path_for_edit_tools():
+    # find_symbol declares name_path_pattern -> forward alias only
+    fwd = gateway._alias_map_for({"properties": {"name_path_pattern": {}}})
+    assert fwd.get("name_path") == "name_path_pattern"
+    assert "name_path_pattern" not in fwd  # reverse inactive here
+    # replace_symbol_body/insert_*/find_referencing_symbols/rename_symbol declare name_path -> reverse alias
+    rev = gateway._alias_map_for({"properties": {"name_path": {}, "relative_path": {}, "body": {}}})
+    assert rev.get("name_path_pattern") == "name_path"
+    assert "name_path" not in rev  # forward inactive here
+
+
+def test_alias_map_replace_content_repl():
+    m = gateway._alias_map_for({"properties": {"relative_path": {}, "needle": {}, "repl": {}, "mode": {}}})
+    assert m.get("replacement") == "repl"
+    assert m.get("new_string") == "repl"
+
+
 def test_normalize_arguments_rewrites_and_dedupes():
     aliases = {"name_path": "name_path_pattern"}
     assert gateway._normalize_arguments({"name_path": "Foo"}, aliases) == {"name_path_pattern": "Foo"}

@@ -96,10 +96,18 @@ _SNAPSHOT_NAME = "serena_tools.json"
 # canonical field exists on the target tool and the alias does not (see _alias_map_for), so a
 # rewrite can never shadow a real parameter nor forward an argument the tool does not declare.
 _SERENA_ARG_ALIASES: dict[str, str] = {
+    # find_symbol renamed name_path -> name_path_pattern; the edit/reference tools kept name_path.
+    # Both directions live here; _alias_map_for activates only the one whose canonical the tool
+    # declares, so a tool that has name_path_pattern gets the forward map and a tool that has
+    # name_path gets the reverse — they can never both fire for one tool.
     "name_path": "name_path_pattern",
+    "name_path_pattern": "name_path",
     "path": "relative_path",
     "file_path": "relative_path",
     "file": "relative_path",
+    # replace_content's replacement field is `repl`; agents reach for edit-tool vocabulary.
+    "replacement": "repl",
+    "new_string": "repl",
 }
 
 
