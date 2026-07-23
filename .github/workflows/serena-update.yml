@@ -1,0 +1,102 @@
+name: serena-update
+
+# Serena is pinned by a fixed commit SHA in two lockstep places (servers/harness-mcp/pyproject.toml
+# and SERENA_PIN in gateway.py) plus a generated tool snapshot (serena_tools.json). Nothing pulls
+# upstream fixes in on its own. This job checks oraios/serena weekly and, when the pin is stale,
+# bumps both places, regenerates the snapshot against the new Serena, runs the suite, and opens (or
+# updates) a single PR. A failing suite opens the PR as a draft rather than hiding the update.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: serena-update
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve current and latest Serena SHA
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(grep -oE 'SERENA_PIN = "[0-9a-f]{40}"' servers/harness-mcp/repo_agent_harness/gateway.py | grep -oE '[0-9a-f]{40}')
+          latest=$(gh api repos/oraios/serena/commits/main --jq .sha)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "latest_short=${latest:0:12}" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Serena already pinned to latest ($current)."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Serena update available: $current -> $latest"
+          fi
+
+      - name: Bump the pin in both lockstep places
+        if: steps.check.outputs.changed == 'true'
+        env:
+          OLD: ${{ steps.check.outputs.current }}
+          NEW: ${{ steps.check.outputs.latest }}
+        run: |
+          sed -i "s#serena@${OLD}#serena@${NEW}#" servers/harness-mcp/pyproject.toml
+          sed -i "s#SERENA_PIN = \"${OLD}\"#SERENA_PIN = \"${NEW}\"#" servers/harness-mcp/repo_agent_harness/gateway.py
+
+      - name: Set up uv + Python
+        if: steps.check.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Sync deps (installs the new Serena)
+        if: steps.check.outputs.changed == 'true'
+        working-directory: servers/harness-mcp
+        run: uv sync
+
+      - name: Regenerate the Serena tool snapshot
+        if: steps.check.outputs.changed == 'true'
+        working-directory: servers/harness-mcp
+        run: uv run repo-agent-harness gateway-snapshot
+
+      - name: Run the suite
+        id: test
+        if: steps.check.outputs.changed == 'true'
+        continue-on-error: true
+        working-directory: servers/harness-mcp
+        run: uv run pytest -q
+
+      - name: Open or update the update PR
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/serena-update
+          delete-branch: true
+          base: main
+          add-paths: |
+            servers/harness-mcp/pyproject.toml
+            servers/harness-mcp/repo_agent_harness/gateway.py
+            servers/harness-mcp/repo_agent_harness/serena_tools.json
+            servers/harness-mcp/uv.lock
+          commit-message: "chore(serena): bump pinned Serena to ${{ steps.check.outputs.latest_short }}"
+          title: "chore(serena): update pinned Serena to ${{ steps.check.outputs.latest_short }}"
+          labels: dependencies
+          draft: ${{ steps.test.outcome == 'failure' }}
+          body: |
+            Automated weekly Serena update.
+
+            - **From:** `${{ steps.check.outputs.current }}`
+            - **To:** `${{ steps.check.outputs.latest }}` (`oraios/serena@main`)
+            - Regenerated `serena_tools.json` against the new Serena, and re-synced `uv.lock`.
+            - Suite result: **${{ steps.test.outcome }}** — a `failure` opens this as a draft; review the Serena changelog before merging.
+
+            Merging to `main` triggers the normal release flow.
