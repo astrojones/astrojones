@@ -59,10 +59,12 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Sync deps (installs the new Serena)
+      - name: Re-lock and sync (installs the new Serena)
         if: steps.check.outputs.changed == 'true'
         working-directory: servers/harness-mcp
-        run: uv sync
+        run: |
+          uv lock            # regenerate uv.lock for the bumped Serena pin
+          uv sync --frozen   # install exactly the locked set (fails if the lock drifted)
 
       - name: Regenerate the Serena tool snapshot
         if: steps.check.outputs.changed == 'true'
@@ -92,10 +94,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$branch"
-          # uv.lock is gitignored in this repo, so only the three tracked files are committed.
           git add servers/harness-mcp/pyproject.toml \
                   servers/harness-mcp/repo_agent_harness/gateway.py \
-                  servers/harness-mcp/repo_agent_harness/serena_tools.json
+                  servers/harness-mcp/repo_agent_harness/serena_tools.json \
+                  servers/harness-mcp/uv.lock
           git commit -m "chore(serena): bump pinned Serena to ${SHORT}"
           git push --force origin "$branch"
           {
@@ -103,7 +105,7 @@ jobs:
             echo
             echo "- From: ${OLD}"
             echo "- To:   ${NEW} (oraios/serena@main)"
-            echo "- Regenerated serena_tools.json against the new Serena."
+            echo "- Regenerated serena_tools.json and re-locked uv.lock against the new Serena."
             echo "- Suite result: ${TEST_OUTCOME} (a failure opens this as a draft; review the Serena changelog before merging)."
             echo
             echo "Merging to main triggers the normal release flow."
