@@ -1073,22 +1073,38 @@ class SerenaGateway:
             await self._discard_locked()
 
 
-_PY_DECORATED_SUFFIXES = frozenset({".py", ".pyi"})
-_DEF_START_KEYWORDS = ("def ", "async def ", "class ")
+# Languages whose leading ``@`` line is a decorator/annotation that Serena's replace span
+# covers (so a body omitting it would drop it). Python, TypeScript/JS, Java, Kotlin, Scala.
+_DECORATED_SUFFIXES = frozenset(
+    {".py", ".pyi", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".java", ".kt", ".kts", ".scala"}
+)
+
+
+def _bracket_delta(line: str) -> int:
+    """Net change in (), [], {} nesting contributed by ``line`` (best-effort; ignores strings)."""
+    return sum(line.count(opener) - line.count(closer) for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")))
 
 
 def _leading_decorator_lines(body: str) -> list[str]:
-    """Return the leading ``@decorator`` block of a Python symbol body (``[]`` when none).
+    """Return the leading ``@decorator`` / ``@annotation`` block of a symbol body (``[]`` when none).
 
-    The block is every line before the first line whose stripped form starts a def/async
-    def/class — so multi-line decorators (whose continuation lines don't begin with ``@``) are
-    captured whole. Returns ``[]`` unless that prefix exists and its first line is a decorator.
+    Language-agnostic and bracket-aware: collects the run of lines beginning with an ``@`` line,
+    swallowing any multi-line decorator arguments (continuation lines whose brackets are still
+    open), and stops at the first line that — at bracket depth zero — does not start with ``@``
+    (the symbol's own declaration). Works for Python, TypeScript/JS, Java, Kotlin and Scala.
+    Returns ``[]`` when the body is undecorated, or when no declaration line is ever reached (a
+    runaway bracket count) so a pathological body can never be swallowed whole and doubled.
     """
-    lines = body.splitlines()
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith(_DEF_START_KEYWORDS):
-            return lines[:i] if i and lines[0].lstrip().startswith("@") else []
-    return []
+    out: list[str] = []
+    depth = 0
+    saw_declaration = False
+    for line in body.splitlines():
+        if depth <= 0 and not line.lstrip().startswith("@"):
+            saw_declaration = True
+            break
+        out.append(line)
+        depth += _bracket_delta(line)
+    return out if saw_declaration else []
 
 
 def _restore_dropped_decorators(current_body: str, new_body: str) -> str | None:
@@ -1150,15 +1166,18 @@ async def _current_symbol_body(gw: SerenaGateway, name_path: str, relative_path:
 async def _preserve_symbol_decorators(gw: SerenaGateway, arguments: dict) -> dict:
     """Restore decorators a replace_symbol_body would silently drop, else return arguments unchanged.
 
-    Scoped to Python (.py/.pyi); returns the arguments untouched on any missing field, non-Python
-    target, lookup miss, or when the replacement already carries its own decorators.
+    Scoped to decorator/annotation languages (_DECORATED_SUFFIXES: Python, TypeScript/JS, Java,
+    Kotlin, Scala); returns the arguments untouched on any missing field, out-of-scope target,
+    lookup miss, or when the replacement already carries its own decorators. The lookup is
+    self-activating — it only rewrites when Serena's own body view starts with a decorator block —
+    so widening the language set cannot cause a spurious edit.
     """
     body = arguments.get("body")
     name_path = arguments.get("name_path")
     relative_path = arguments.get("relative_path")
     if not (isinstance(body, str) and isinstance(name_path, str) and isinstance(relative_path, str)):
         return arguments
-    if Path(relative_path).suffix.lower() not in _PY_DECORATED_SUFFIXES:
+    if Path(relative_path).suffix.lower() not in _DECORATED_SUFFIXES:
         return arguments
     current_body = await _current_symbol_body(gw, name_path, relative_path)
     if current_body is None:

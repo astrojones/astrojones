@@ -562,6 +562,11 @@ def test_leading_decorator_lines():
     # Undecorated def/class -> no block.
     assert gateway._leading_decorator_lines("def f():\n    pass\n") == []
     assert gateway._leading_decorator_lines("class C:\n    pass\n") == []
+    # A TypeScript @Component with a multi-line object argument is captured whole.
+    ts = "@Component({\n  selector: 'x',\n})\nexport class Foo {}\n"
+    assert gateway._leading_decorator_lines(ts) == ["@Component({", "  selector: 'x',", "})"]
+    # Runaway bracket count (no declaration ever reached) -> [] so the body is never swallowed whole.
+    assert gateway._leading_decorator_lines("@x(\n  unclosed,\n") == []
 
 
 def test_restore_dropped_decorators():
@@ -622,8 +627,17 @@ async def test_replace_symbol_body_undecorated_untouched():
     assert forwarded["arguments"]["body"] == new
 
 
-async def test_replace_symbol_body_skips_non_python():
-    """Non-Python targets never consult find_symbol for the Python decorator logic."""
+async def test_replace_symbol_body_reattaches_typescript_decorator():
+    """The fix is language-agnostic: a TypeScript @Component dropped by the swap is restored."""
+    forwarded: dict = {}
+    current = "@Component({\n  selector: 'x',\n})\nexport class Foo {}\n"
+    tool = _replace_tool(_body_recorder(current, forwarded))
+    await tool.run({"name_path": "Foo", "relative_path": "m.ts", "body": "export class Foo { y = 2; }\n"})
+    assert forwarded["arguments"]["body"] == "@Component({\n  selector: 'x',\n})\nexport class Foo { y = 2; }\n"
+
+
+async def test_replace_symbol_body_skips_non_decorator_language():
+    """A language without @-decorators (e.g. Go) never consults find_symbol."""
     calls: list[str] = []
 
     class _Recorder:
@@ -632,7 +646,7 @@ async def test_replace_symbol_body_skips_non_python():
             return SimpleNamespace(content=[], structuredContent={}, isError=False)
 
     tool = _replace_tool(_Recorder())
-    await tool.run({"name_path": "Foo", "relative_path": "m.ts", "body": "class Foo {}"})
+    await tool.run({"name_path": "Foo", "relative_path": "m.go", "body": "func Foo() {}"})
     assert calls == ["replace_symbol_body"]
 
 
