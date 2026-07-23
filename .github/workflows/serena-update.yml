@@ -91,10 +91,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$branch"
+          # uv.lock is gitignored in this repo, so only the three tracked files are committed.
           git add servers/harness-mcp/pyproject.toml \
                   servers/harness-mcp/repo_agent_harness/gateway.py \
-                  servers/harness-mcp/repo_agent_harness/serena_tools.json \
-                  servers/harness-mcp/uv.lock
+                  servers/harness-mcp/repo_agent_harness/serena_tools.json
           git commit -m "chore(serena): bump pinned Serena to ${SHORT}"
           git push --force origin "$branch"
           {
@@ -102,7 +102,7 @@ jobs:
             echo
             echo "- From: ${OLD}"
             echo "- To:   ${NEW} (oraios/serena@main)"
-            echo "- Regenerated serena_tools.json against the new Serena, and re-synced uv.lock."
+            echo "- Regenerated serena_tools.json against the new Serena."
             echo "- Suite result: ${TEST_OUTCOME} (a failure opens this as a draft; review the Serena changelog before merging)."
             echo
             echo "Merging to main triggers the normal release flow."
