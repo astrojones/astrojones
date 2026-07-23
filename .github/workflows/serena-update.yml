@@ -54,7 +54,8 @@ jobs:
 
       - name: Set up uv + Python
         if: steps.check.outputs.changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        # setup-uv publishes no moving major tag past v7, so pin the latest full release (node24).
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
 
