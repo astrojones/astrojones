@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sp.add_argument(
         "--target",
-        choices=["claude", "opencode", "both"],
+        choices=["claude", "opencode", "antigravity", "all", "both"],
         default="claude",
         help="which per-assistant surface to materialize (default: claude)",
     )

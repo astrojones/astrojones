@@ -34,11 +34,12 @@ _REPO_URL = "https://github.com/astrojones/astrojones"
 _PLACEHOLDER_NAME = "__REPO_NAME__"
 _PLACEHOLDER_SPEC = "__HARNESS_SPEC__"
 
-BootstrapTarget = Literal["claude", "opencode", "both"]
+BootstrapTarget = Literal["claude", "opencode", "antigravity", "all", "both"]
 
-_VALID_TARGETS: frozenset[str] = frozenset({"claude", "opencode", "both"})
-_CLAUDE_TARGETS: frozenset[str] = frozenset({"claude", "both"})
-_OPENCODE_TARGETS: frozenset[str] = frozenset({"opencode", "both"})
+_VALID_TARGETS: frozenset[str] = frozenset({"claude", "opencode", "antigravity", "all", "both"})
+_CLAUDE_TARGETS: frozenset[str] = frozenset({"claude", "both", "all"})
+_OPENCODE_TARGETS: frozenset[str] = frozenset({"opencode", "both", "all"})
+_ANTIGRAVITY_TARGETS: frozenset[str] = frozenset({"antigravity", "both", "all"})
 
 
 def harness_spec(pin: str | None = None) -> str:
@@ -284,6 +285,45 @@ def _install_opencode_json(root: Path, force: bool, result: dict) -> None:
         result["merged"].append(".opencode/opencode.json")
 
 
+def _antigravity_harness_block(spec_str: str) -> dict:
+    """The harness-owned slice of ``.agents/mcp_config.json``."""
+    return {
+        "mcpServers": {
+            "repo-agent-harness": {
+                "command": "uvx",
+                "args": [
+                    "--from",
+                    spec_str,
+                    "repo-agent-harness-mcp",
+                ],
+            },
+        },
+    }
+
+
+def _install_antigravity_mcp_config(root: Path, spec_str: str, force: bool, result: dict) -> None:
+    """Write or merge ``.agents/mcp_config.json`` with the harness wiring."""
+    dest = root / ".agents" / "mcp_config.json"
+    block = _antigravity_harness_block(spec_str)
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(block, indent=2) + "\n")
+        result["created"].append(".agents/mcp_config.json")
+        return
+    existing = json.loads(dest.read_text())
+    if force:
+        merged = _deep_merge(existing, block)
+        dest.write_text(json.dumps(merged, indent=2) + "\n")
+        result["replaced"].append(".agents/mcp_config.json")
+        return
+    merged = _deep_merge(existing, block)
+    if merged == existing:
+        result["skipped"].append(".agents/mcp_config.json")
+    else:
+        dest.write_text(json.dumps(merged, indent=2) + "\n")
+        result["merged"].append(".agents/mcp_config.json")
+
+
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Deep-merge ``overlay`` into ``base``; ``overlay`` wins on conflict.
 
@@ -377,6 +417,9 @@ def bootstrap_repo(  # noqa: PLR0913 — six kwargs are intentional; this is the
     # opencode side
     if target in _OPENCODE_TARGETS:
         _install_opencode_json(rootp, force, result)
+    # Antigravity side
+    if target in _ANTIGRAVITY_TARGETS:
+        _install_antigravity_mcp_config(rootp, spec or harness_spec(pin), force, result)
     # Next-steps
     next_steps: list[str] = []
     if target in _CLAUDE_TARGETS:
@@ -385,6 +428,8 @@ def bootstrap_repo(  # noqa: PLR0913 — six kwargs are intentional; this is the
         next_steps.append("For Claude Code: the plugin auto-connects the harness server.")
     if target in _OPENCODE_TARGETS:
         next_steps.append("For opencode: the opencode plugin rewrites the skills.paths sentinel at first load.")
+    if target in _ANTIGRAVITY_TARGETS:
+        next_steps.append("For Google Antigravity: .agents/mcp_config.json configured.")
     result["next_steps"] = next_steps
     return result
 
@@ -403,5 +448,6 @@ def inspect_bootstrap(root: str) -> dict:
         "agent_tree": (rootp / "agent").is_dir(),
         "agents_md": (rootp / "AGENTS.md").is_file(),
         "opencode_json": (rootp / ".opencode" / "opencode.json").is_file(),
+        "antigravity_mcp_config": (rootp / ".agents" / "mcp_config.json").is_file(),
     }
     return {"ok": True, "root": str(rootp), "present": present}

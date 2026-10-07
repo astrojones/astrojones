@@ -393,7 +393,9 @@ def repo_bootstrap(
     ] = None,
     target: Annotated[
         str,
-        Field(description="Which surface to materialize: 'claude', 'opencode', or 'both' (default)."),
+        Field(
+            description="Which surface to materialize: 'claude', 'opencode', 'antigravity', 'all', or 'both' (default)."
+        ),
     ] = "both",
     agents_md: Annotated[
         str,

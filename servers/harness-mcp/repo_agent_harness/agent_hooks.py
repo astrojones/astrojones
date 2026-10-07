@@ -65,6 +65,54 @@ def pre_tool_use(data: dict, root: str | None = None) -> dict:
     return {}
 
 
+def antigravity_pre_tool_use(data: dict, root: str | None = None) -> dict:
+    """Deny dangerous shell commands and secret-path reads for Antigravity."""
+    tc = data.get("toolCall") or {}
+    tool = tc.get("name", "")
+    targs = tc.get("args") or {}
+    repo = root or (data.get("workspacePaths") or [None])[0] or git.repo_root()
+    base = repo or str(Path.cwd())
+
+    if tool == "run_command":
+        cmd = targs.get("CommandLine", "")
+        if cmd:
+            check = policies.check_command(cmd, base)
+            if not check.allowed:
+                return {"decision": "deny", "reason": check.reason}
+            if check.requires_confirmation:
+                return {"decision": "ask", "reason": check.reason}
+            return {"decision": "allow"}
+
+    elif tool in {"view_file", "write_to_file", "replace_file_content"}:
+        path = targs.get("AbsolutePath") or targs.get("TargetFile") or ""
+        if path:
+            cfg = secrets.load(base)
+            try:
+                rel = str(Path(path).resolve().relative_to(Path(base).resolve()))
+            except ValueError:
+                rel = path
+            if secrets.is_secret_path(rel, cfg):
+                return {"decision": "deny", "reason": f"Accessing a secret path ('{rel}') is blocked by policy."}
+            return {"decision": "allow"}
+
+    return {}
+
+
+def antigravity_post_tool_use(data: dict, root: str | None = None) -> dict:
+    """PostToolUse hook for Google Antigravity: record touched files for perception."""
+    tc = data.get("toolCall") or {}
+    tool = tc.get("name", "")
+    targs = tc.get("args") or {}
+    repo = root or (data.get("workspacePaths") or [None])[0] or git.repo_root()
+
+    if tool in {"write_to_file", "replace_file_content"}:
+        path = targs.get("TargetFile") or ""
+        if path and repo:
+            _record_touched(repo, path)
+
+    return {}
+
+
 def _read_json(path: Path) -> dict | list | None:
     """Best-effort JSON read; None when the file is missing or unparseable (fail-open)."""
     try:
@@ -281,6 +329,8 @@ _HANDLERS = {
     "post-tool-use": post_tool_use,
     "user-prompt-submit": user_prompt_submit,
     "session-start": session_start,
+    "antigravity-pre-tool-use": antigravity_pre_tool_use,
+    "antigravity-post-tool-use": antigravity_post_tool_use,
 }
 
 

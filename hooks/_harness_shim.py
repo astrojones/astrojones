@@ -88,15 +88,33 @@ def run(event: str) -> None:
         argv = _harness_argv(root, event) or _plugin_bundle_argv(event)
         if argv is None:
             _empty()
-        out = subprocess.run(
-            argv,
-            input=payload,
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT,
-            check=False,
-            cwd=str(root),
-        )
+        try:
+            out = subprocess.run(
+                argv,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT,
+                check=False,
+                cwd=str(root),
+            )
+        except OSError:
+            project = Path(__file__).resolve().parent.parent / "servers" / "harness-mcp"
+            site_pkgs = list(project.glob(".venv/lib/python*/site-packages"))
+            env = dict(subprocess.os.environ)
+            paths = [str(project)] + [str(p) for p in site_pkgs]
+            env["PYTHONPATH"] = subprocess.os.pathsep.join(paths)
+            fb_argv = [sys.executable, "-m", "repo_agent_harness.agent_hooks", event]
+            out = subprocess.run(
+                fb_argv,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT,
+                check=False,
+                cwd=str(root),
+                env=env,
+            )
         decision = json.loads(out.stdout)
     except Exception:
         _empty()

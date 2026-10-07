@@ -105,15 +105,33 @@ def main() -> None:
         argv = _harness_argv(root) or _plugin_bundle_argv()
         if argv is None:
             _allow()
-        out = subprocess.run(
-            argv,
-            input=payload,
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT,
-            check=False,
-            cwd=str(root),  # the pinned harness reads agent/policies/ from its cwd repo
-        )
+        try:
+            out = subprocess.run(
+                argv,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT,
+                check=False,
+                cwd=str(root),  # the pinned harness reads agent/policies/ from its cwd repo
+            )
+        except OSError:
+            project = Path(__file__).resolve().parent.parent / "servers" / "harness-mcp"
+            site_pkgs = list(project.glob(".venv/lib/python*/site-packages"))
+            env = dict(subprocess.os.environ)
+            paths = [str(project)] + [str(p) for p in site_pkgs]
+            env["PYTHONPATH"] = subprocess.os.pathsep.join(paths)
+            fb_argv = [sys.executable, "-m", "repo_agent_harness.agent_hooks", _EVENT]
+            out = subprocess.run(
+                fb_argv,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT,
+                check=False,
+                cwd=str(root),
+                env=env,
+            )
         decision = json.loads(out.stdout)
     except Exception:
         _allow()
