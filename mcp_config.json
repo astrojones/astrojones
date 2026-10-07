@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "repo-agent-harness": {
+      "command": "bash",
+      "args": ["./run-mcp.sh"]
+    }
+  }
+}

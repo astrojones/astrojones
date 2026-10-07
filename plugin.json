@@ -1,0 +1,19 @@
+{
+  "name": "astrojones",
+  "displayName": "astrojones",
+  "version": "4.0.0",
+  "description": "The repo agent harness: deterministic repo_* tools, safety hooks, rules, coding-workflow skills and subagents.",
+  "author": {
+    "name": "astrojones",
+    "url": "https://github.com/astrojones"
+  },
+  "homepage": "https://github.com/astrojones/astrojones",
+  "keywords": [
+    "harness",
+    "mcp",
+    "serena",
+    "coding-agent",
+    "safety",
+    "code-navigation"
+  ]
+}
