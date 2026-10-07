@@ -4,8 +4,9 @@
 open gets safe, deterministic, repo-aware tooling and symbol-level code navigation — instead
 of a coding agent improvising with raw shell, and with **no harness files written into the repo**.
 
-`astrojones` is client-agnostic in spirit: the same harness server runs for Claude Code (bundled
-here, auto-connecting) and — pinned into a repo's `.mcp.json` — for CI and other MCP clients.
+`astrojones` is client-agnostic in spirit: the same harness runs for Claude Code (bundled
+here, auto-connecting), OpenCode (via `opencode/`), and Google Antigravity (via `antigravity/`
+and top-level plugin manifest), as well as CI and other MCP clients.
 It is **generic**: nothing in it is tied to any one org. (The astrojones-specific deploy
 layer lives in the separate, private [`deploy`](https://github.com/astrojones/deploy) plugin,
 which builds on `astrojones`.)
@@ -54,7 +55,7 @@ harness only when you want editable per-repo config or need to support a non-MCP
 | Path | When | Mechanism |
 |------|------|-----------|
 | **In-session, explicit** | On demand — to edit `agent/` policies/health, or to harness a freshly-created repo | Call the **`repo_bootstrap`** MCP tool (optionally `path=...` to target another repo, `pin=...` for a project `.mcp.json`). |
-| **Fallback / CI** | Non-Claude-Code clients (opencode), CI, or the MCP server is unreachable | `/harness-init` runs the bundled CLI: `uv run --project "${CLAUDE_PLUGIN_ROOT}/servers/harness-mcp" repo-agent-harness bootstrap --target both`. |
+| **Fallback / CI** | Non-Claude-Code clients (opencode, antigravity), CI, or the MCP server is unreachable | `/harness-init` runs the bundled CLI: `uv run --project "${CLAUDE_PLUGIN_ROOT}/servers/harness-mcp" repo-agent-harness bootstrap --target all`. |
 
 The workflow skills (`bugfix`, `feature`, …) and `/harness-init` live in the harness server
 as **prompts** (the single source of truth), exposed via `@mcp.prompt()` (Claude Code) and a
