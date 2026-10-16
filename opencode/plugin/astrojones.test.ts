@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import Astrojones from "./astrojones"
 import {
   DESTRUCTIVE_FALLBACK,
   claudeToOpencode,
@@ -113,5 +114,19 @@ describe("mapSkillsPaths (sentinel rewrite)", () => {
     expect(
       mapSkillsPaths(["<set-by-opencode-plugin>", "./keep"], resolved),
     ).toEqual([resolved, "./keep"])
+  })
+})
+
+describe("V2 default export (OpenCode 2)", () => {
+  it("exposes an id, a V2 setup, and a V1 server entrypoint", () => {
+    expect(Astrojones.id).toBe("astrojones")
+    expect(typeof Astrojones.setup).toBe("function")
+    expect(typeof Astrojones.server).toBe("function")
+  })
+
+  it("setup() returns quietly on a V1-shaped context (no tool/permission domains)", async () => {
+    // V1 also invokes a default export's setup; it must be a no-op there and
+    // must not touch the filesystem (the guard runs before any bootstrap).
+    await expect(Astrojones.setup({} as never)).resolves.toBeUndefined()
   })
 })

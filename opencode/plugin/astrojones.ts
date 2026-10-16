@@ -381,3 +381,118 @@ export const AstrojonesDev: Plugin = async ({ worktree, directory }) => {
     },
   }
 }
+
+// --- V2 plugin (OpenCode 2) -------------------------------------------------
+// OpenCode 2 dropped the V1 plugin API: a V1 factory returning a hook map no
+// longer loads ("Plugin must export a default definition with an id and an
+// effect or setup function"). This half ports the same behavior onto the V2
+// API. The types are declared structurally here instead of importing
+// @opencode/plugin, so the file keeps loading with zero runtime dependencies
+// under both V1 and V2 — the same dual-target approach the upstream
+// superpowers plugin uses.
+type V2ToolHookEvent = { readonly tool: string; readonly input: unknown }
+
+type V2PermissionEvaluation = {
+  readonly sessionID: string
+  readonly agent?: string
+  readonly action: string
+  readonly resources: readonly string[]
+  readonly metadata?: Record<string, unknown>
+  effect: "allow" | "ask" | "deny"
+  message?: string
+}
+
+type V2PluginContext = {
+  readonly location?: {
+    readonly directory?: string
+    readonly project?: { readonly directory?: string; readonly canonical?: string }
+  }
+  readonly tool: {
+    hook(
+      name: "execute.before",
+      callback: (event: V2ToolHookEvent) => void | Promise<void>,
+    ): Promise<unknown>
+  }
+  readonly permission: {
+    hook(
+      name: "evaluate",
+      callback: (event: V2PermissionEvaluation) => void | Promise<void>,
+    ): Promise<unknown>
+  }
+}
+
+async function setup(ctx: V2PluginContext): Promise<void> {
+  // V1 also invokes a default export's setup() but with a V1-shaped context
+  // that lacks the tool/permission domains. Detect that and return quietly;
+  // V1 is served entirely by the AstrojonesDev named export.
+  if (!ctx?.tool?.hook || !ctx?.permission?.hook) return
+
+  const target =
+    ctx.location?.directory ??
+    ctx.location?.project?.canonical ??
+    process.cwd()
+
+  void bootstrapOnce(target).catch(() => {
+    /* fail-open: a bootstrap failure must not break opencode */
+  })
+
+  // V2 evaluates permissions before a shell command runs, and this single hook
+  // replaces BOTH V1 hooks: an evaluate hook may set effect to "deny" as well
+  // as "ask". The V1 split existed only because tool.execute.before was
+  // allow/deny and could not request confirmation; that limitation is gone, so
+  // the harness policy check runs once per evaluation instead of twice.
+  // `resources` carries the scanner-produced command string(s) for a shell
+  // action, so no callID join between hooks is needed.
+  try {
+    await ctx.permission.hook("evaluate", async (event) => {
+      if (event.action !== "shell") return
+      await bootstrapOnce(target)
+      let confirm = false
+      for (const resource of event.resources) {
+        const decision = await policyCheck(resource, target)
+        if (!decision.allowed) {
+          event.effect = "deny"
+          event.message = `[astrojones] command blocked by policy: ${decision.reason}`
+          return
+        }
+        if (decision.requires_confirmation) confirm = true
+      }
+      // Never downgrade an explicit deny; only escalate allow -> ask.
+      if (confirm && event.effect === "allow") event.effect = "ask"
+    })
+  } catch (err) {
+    console.warn(`[astrojones] V2 permission hook registration failed: ${String(err)}`)
+  }
+
+  // Belt-and-suspenders safety floor. The harness check above is the primary
+  // gate; this cheap, subprocess-free regex fallback mirrors the V1 design
+  // comment ("the safety floor never depends on permission.ask firing") so an
+  // unloaded or erroring evaluate hook still blocks the obvious nukes.
+  try {
+    await ctx.tool.hook("execute.before", async (event) => {
+      if (event.tool !== "bash" && event.tool !== "Bash" && event.tool !== "shell") return
+      const command =
+        typeof (event.input as { command?: unknown })?.command === "string"
+          ? (event.input as { command: string }).command
+          : ""
+      if (!command) return
+      for (const re of DESTRUCTIVE_FALLBACK) {
+        if (re.test(command)) {
+          throw new Error(
+            `[astrojones] command blocked by built-in fallback (${re})`,
+          )
+        }
+      }
+    })
+  } catch (err) {
+    console.warn(`[astrojones] V2 tool hook registration failed: ${String(err)}`)
+  }
+}
+
+// Default export: { id, server, setup }.
+// V2 reads { id, setup }; V1 reads the named export / server() function.
+export default {
+  id: "astrojones",
+  server: AstrojonesDev,
+  setup,
+}

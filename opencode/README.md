@@ -5,6 +5,10 @@ Claude Code half does, except: opencode does not auto-load `.claude/`, so this
 plugin **materializes** the per-assistant surfaces (skills, commands, agents)
 into the locations opencode reads from.
 
+One default export serves **both OpenCode 1 and OpenCode 2**: V1 uses the named
+`AstrojonesDev` export (a plugin factory returning the V1 hook map), V2 reads the
+default export's `{ id, setup }`. See [OpenCode 2](#opencode-2) below.
+
 The harness MCP server's `prompts/<name>.md` files are the single source of
 truth; this plugin derives the opencode surfaces from them on load.
 
@@ -21,12 +25,14 @@ Add to `~/.config/opencode/opencode.json` (global) or `./opencode.json` (project
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["astrojones-opencode"]
+  "plugins": ["astrojones-opencode"]
 }
 ```
 
-opencode runs `bun install` at startup; the plugin's `npm install` brings in the
-harness server's launcher and registers the load-time bootstrap hook.
+On OpenCode 1, use the singular `plugin` key instead; V2 normalizes it, so the
+same install works on both. opencode runs `bun install` at startup; the plugin's
+`npm install` brings in the harness server's launcher and registers the
+load-time bootstrap hook.
 
 ### From a local clone (development)
 
@@ -44,18 +50,22 @@ Then add the harness MCP server to your `~/.config/opencode/opencode.json`:
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "repo-agent-harness": {
-      "type": "local",
-      "command": [
-        "uv", "run", "--project",
-        "<path-to-astrojones>/servers/harness-mcp",
-        "repo-agent-harness-mcp"
-      ],
-      "enabled": true
+    "servers": {
+      "repo-agent-harness": {
+        "type": "local",
+        "command": [
+          "uv", "run", "--project",
+          "<path-to-astrojones>/servers/harness-mcp",
+          "repo-agent-harness-mcp"
+        ]
+      }
     }
   }
 }
 ```
+
+On OpenCode 1, keep the server directly under `mcp` and mark it `"enabled": true`.
+V2 accepts that V1 shape too, so either form loads on either release.
 
 ## What it does on load
 
@@ -76,10 +86,30 @@ Then add the harness MCP server to your `~/.config/opencode/opencode.json`:
 5. **Drift check** — calls `repo-agent-harness drift-check`; if any plugin-shipped
    `skills/<name>/SKILL.md` has diverged from the harness body, logs a
    `console.warn` listing the drifted prompts. **Never blocks**, never errors.
-6. **`tool.execute.before` policy hook** — every `bash`/`Bash` tool call has its
-   command forwarded to `repo-agent-harness check-command`. If the harness
-   denies, the call is blocked with a structured error. Mirror of the Claude
-   `PreToolUse` hook.
+6. **Command policy hook** — every `bash`/`Bash` shell call has its command
+   forwarded to `repo-agent-harness check-command`. A harness deny blocks the
+   call with a structured error; a "confirm-first" decision raises the
+   interactive prompt instead. Mirror of the Claude `PreToolUse` hook; the
+   wiring differs per API — see [OpenCode 2](#opencode-2).
+
+## OpenCode 2
+
+OpenCode 2 dropped the V1 plugin API: a factory returning a hook map no longer
+loads (`Plugin must export a default definition with an id and an effect or setup
+function`). This plugin keeps one entrypoint for both releases by default-exporting
+an object with `server()` (V1) and `setup(ctx)` (V2):
+
+- **Skills / commands / agents** are unchanged. Both APIs run the same
+  materialization into `<target>/.opencode/{skills,commands,agents}` and rewrite
+  the `skills.paths` sentinel.
+- **Policy hook**: V2 replaces the V1 `tool.execute.before` + `permission.ask`
+  pair with a single `ctx.permission.hook("evaluate")`. A V2 evaluate hook may set
+  `effect` to `deny` as well as `ask`, so the harness check runs once and
+  `resources` already carries the scanner-produced shell command — no `callID`
+  join between hooks. A subprocess-free regex fallback stays registered on
+  `ctx.tool.hook("execute.before")` as a belt-and-suspenders safety floor.
+- The V2 context is typed structurally instead of importing `@opencode/plugin`, so
+  the file keeps loading under both APIs with no extra runtime dependency.
 
 ## Fail-open
 
