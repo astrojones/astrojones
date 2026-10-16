@@ -44,18 +44,3 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-
-  - package-ecosystem: "docker"
-    directory: "/docker"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    groups:
-      docker-docker:
-        applies-to: version-updates
-        patterns:
-          - "*"
-      security-updates:
-        applies-to: security-updates
-        patterns:
-          - "*"
